@@ -128,6 +128,10 @@ Thumbs.db
 # Log files
 *.log
 
+# Large SDK files
+android-sdk-tools.zip
+gradle-wrapper.zip
+
 # Android Studio
 *.iml
 .gradle
@@ -181,3 +185,7 @@ Thumbs.db
 
 # Log files
 *.log
+
+# Large SDK files
+android-sdk-tools.zip
+gradle-wrapper.zip
