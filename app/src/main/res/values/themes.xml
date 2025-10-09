@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    
+    <!-- Base application theme -->
+    <style name="Theme.LLMBatteryBenchmark" parent="android:Theme.Material.Light">
+        <item name="android:colorPrimary">@color/primary_color</item>
+        <item name="android:colorPrimaryDark">@color/primary_dark_color</item>
+        <item name="android:colorAccent">@color/accent_color</item>
+        <item name="android:windowBackground">@color/background_color</item>
+        <item name="android:textColorPrimary">@color/text_primary</item>
+        <item name="android:textColorSecondary">@color/text_secondary</item>
+    </style>
+    
+</resources>

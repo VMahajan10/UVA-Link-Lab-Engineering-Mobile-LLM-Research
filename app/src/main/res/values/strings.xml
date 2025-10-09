@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">LLM Battery Benchmark</string>
+    <string name="app_description">Monitor battery consumption during LLM inference operations</string>
+    
+    <!-- MainActivity strings -->
+    <string name="model_selection">Model Selection</string>
+    <string name="select_model">Select Model</string>
+    <string name="benchmark_configuration">Benchmark Configuration</string>
+    <string name="query_interval">Query Interval</string>
+    <string name="start_benchmark">Start Benchmark</string>
+    <string name="stop_benchmark">Stop Benchmark</string>
+    <string name="real_time_metrics">Real-time Metrics</string>
+    <string name="battery_level">Battery Level</string>
+    <string name="queries_completed">Queries Completed</string>
+    <string name="avg_inference_time">Avg Inference Time</string>
+    <string name="estimated_battery_life">Est. Battery Life</string>
+    <string name="results_export">Results Export</string>
+    <string name="export_results">Export Results</string>
+    <string name="export_description">Export benchmark results to CSV files for analysis</string>
+    
+    <!-- Interval options -->
+    <string name="interval_1_minute">1 minute</string>
+    <string name="interval_5_minutes">5 minutes</string>
+    
+    <!-- Status messages -->
+    <string name="benchmark_started">Benchmark started</string>
+    <string name="benchmark_stopped">Benchmark stopped</string>
+    <string name="benchmark_completed">Benchmark completed</string>
+    <string name="model_loaded">Model loaded successfully</string>
+    <string name="model_load_failed">Failed to load model</string>
+    <string name="export_successful">Export successful</string>
+    <string name="export_failed">Export failed</string>
+    <string name="permissions_granted">Permissions granted</string>
+    <string name="permissions_denied">Some permissions denied</string>
+    
+    <!-- Error messages -->
+    <string name="error_select_model">Please select a model first</string>
+    <string name="error_loading_models">Error loading models</string>
+    <string name="error_starting_benchmark">Error starting benchmark</string>
+    <string name="error_stopping_benchmark">Error stopping benchmark</string>
+    <string name="error_exporting_results">Error exporting results</string>
+    
+    <!-- Dialog messages -->
+    <string name="stop_benchmark_title">Stop Benchmark</string>
+    <string name="stop_benchmark_message">Are you sure you want to stop the benchmark? Progress will be saved.</string>
+    <string name="stop">Stop</string>
+    <string name="cancel">Cancel</string>
+    <string name="export_success_title">Export Successful</string>
+    <string name="export_success_message">Results exported to:\n%s</string>
+    <string name="ok">OK</string>
+    
+    <!-- Permission messages -->
+    <string name="permission_storage_title">Storage Permission</string>
+    <string name="permission_storage_message">This app needs storage permission to save benchmark results and access model files.</string>
+    <string name="permission_battery_title">Battery Optimization</string>
+    <string name="permission_battery_message">To ensure accurate battery measurements, please disable battery optimization for this app.</string>
+    <string name="grant_permission">Grant Permission</string>
+    <string name="go_to_settings">Go to Settings</string>
+    
+    <!-- Units -->
+    <string name="unit_percent">%</string>
+    <string name="unit_milliseconds">ms</string>
+    <string name="unit_minutes">m</string>
+    <string name="unit_hours">h</string>
+    <string name="unit_megabytes">MB</string>
+    <string name="unit_gigabytes">GB</string>
+    
+    <!-- Model information -->
+    <string name="model_quantization_2bit">2-bit</string>
+    <string name="model_quantization_3bit">3-bit</string>
+    <string name="model_quantization_4bit">4-bit</string>
+    <string name="model_quantization_5bit">5-bit</string>
+    <string name="model_quantization_6bit">6-bit</string>
+    <string name="model_quantization_8bit">8-bit</string>
+    <string name="model_quantization_fp16">FP16</string>
+    <string name="model_quantization_fp32">FP32</string>
+    
+    <!-- Notification messages -->
+    <string name="notification_benchmark_running">Benchmark Running</string>
+    <string name="notification_benchmark_running_content">LLM battery benchmark in progress</string>
+    <string name="notification_export_complete">Export Complete</string>
+    <string name="notification_export_complete_content">Results exported successfully</string>
+    
+    <!-- Accessibility -->
+    <string name="content_description_battery_icon">Battery level indicator</string>
+    <string name="content_description_progress_bar">Benchmark progress</string>
+    <string name="content_description_export_button">Export results button</string>
+    <string name="content_description_model_spinner">Model selection dropdown</string>
+    <string name="content_description_interval_spinner">Query interval selection dropdown</string>
+</resources>

@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    package="com.research.llmbattery">
+
+    <!-- Required permissions for LLM battery benchmarking -->
+    
+    <!-- Internet access for future remote testing capabilities -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    
+    <!-- External storage permissions for CSV export and model file access -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" 
+        android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" 
+        android:maxSdkVersion="32" />
+    
+    <!-- Wake lock to prevent device sleep during benchmark execution -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    
+    <!-- Foreground service for background query scheduling -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    
+    <!-- Battery optimization bypass for consistent benchmark execution -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    
+    <!-- System alert window for battery optimization dialog -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    
+    <!-- Access to battery statistics for monitoring -->
+    <uses-permission android:name="android.permission.BATTERY_STATS" />
+    
+    <!-- Vibration for user feedback during benchmark -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    
+    <!-- Network state for connectivity checks -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    
+    <!-- Hardware features -->
+    <uses-feature
+        android:name="android.hardware.touchscreen"
+        android:required="false" />
+    
+    <!-- Declare that the app uses large amounts of memory for LLM models -->
+    <uses-feature
+        android:name="android.hardware.ram"
+        android:required="true"
+        android:value="2048" />
+
+    <application
+        android:name=".LLMBatteryApplication"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.LLMBatteryBenchmark"
+        android:hardwareAccelerated="true"
+        android:largeHeap="true"
+        android:requestLegacyExternalStorage="true"
+        android:usesCleartextTraffic="false"
+        tools:targetApi="31">
+
+        <!-- Main Activity - Entry point of the application -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.LLMBatteryBenchmark"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|keyboardHidden|screenSize|smallestScreenSize|screenLayout|uiMode">
+            
+            <!-- Intent filter for launcher -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            
+            <!-- Intent filter for battery optimization settings -->
+            <intent-filter>
+                <action android:name="android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- Background Work Service for Query Scheduling -->
+        <service
+            android:name=".QueryWorkService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- Battery Monitoring Service -->
+        <service
+            android:name=".BatteryMonitoringService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- File Provider for sharing CSV exports -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.research.llmbattery.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <!-- Work Manager Initialization -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+                    android:authorities="com.research.llmbattery.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup" />
+        </provider>
+
+        <!-- Native Library Loading -->
+        <meta-data
+            android:name="com.research.llmbattery.native_library"
+            android:value="llama-jni" />
+
+        <!-- App-specific metadata -->
+        <meta-data
+            android:name="com.research.llmbattery.benchmark_version"
+            android:value="1.0" />
+        
+        <meta-data
+            android:name="com.research.llmbattery.supported_models"
+            android:value="llama,alpaca,vicuna" />
+
+        <!-- Queryable activities for external apps -->
+        <queries>
+            <!-- For battery optimization settings -->
+            <intent>
+                <action android:name="android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+            </intent>
+            
+            <!-- For file sharing -->
+            <intent>
+                <action android:name="android.intent.action.SEND" />
+                <data android:mimeType="text/csv" />
+            </intent>
+            
+            <!-- For external storage access -->
+            <intent>
+                <action android:name="android.intent.action.OPEN_DOCUMENT" />
+                <data android:mimeType="*/*" />
+            </intent>
+        </queries>
+
+    </application>
+
+</manifest>

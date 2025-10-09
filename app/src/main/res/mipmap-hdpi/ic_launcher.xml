@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    
+    <!-- Background circle -->
+    <path
+        android:fillColor="#6750A4"
+        android:pathData="M24,24m-24,0a24,24 0,1 1,48 0a24,24 0,1 1,-48 0" />
+    
+    <!-- Battery icon -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M14,12h16c1.1,0 2,0.9 2,2v20c0,1.1 -0.9,2 -2,2H14c-1.1,0 -2,-0.9 -2,-2V14c0,-1.1 0.9,-2 2,-2z" />
+    
+    <!-- Battery terminal -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30,16h2v4h2v4h-2v4h-2V16z" />
+    
+    <!-- Battery level indicator -->
+    <path
+        android:fillColor="#4CAF50"
+        android:pathData="M16,16h12v16H16V16z" />
+    
+    <!-- LLM text -->
+    <path
+        android:fillColor="#6750A4"
+        android:pathData="M8,32h4v2H8V32zM8,28h6v2H8V28zM8,24h4v2H8V24z" />
+    
+</vector>

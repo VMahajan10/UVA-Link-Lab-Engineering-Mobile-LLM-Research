@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Include app data in backup -->
+    <include domain="file" path="." />
+    
+    <!-- Exclude sensitive data -->
+    <exclude domain="file" path="models/" />
+    <exclude domain="file" path="Documents/" />
+    <exclude domain="file" path="cache/" />
+    
+    <!-- Exclude large model files -->
+    <exclude domain="file" path="**/*.gguf" />
+    <exclude domain="file" path="**/*.bin" />
+    <exclude domain="file" path="**/*.safetensors" />
+    
+    <!-- Exclude CSV export files -->
+    <exclude domain="file" path="**/*.csv" />
+    
+    <!-- Exclude temporary files -->
+    <exclude domain="file" path="**/*.tmp" />
+    <exclude domain="file" path="**/*.temp" />
+    
+    <!-- Exclude log files -->
+    <exclude domain="file" path="**/*.log" />
+</full-backup-content>
