@@ -2,7 +2,7 @@
 <resources>
     
     <!-- Base application theme -->
-    <style name="Theme.LLMBatteryBenchmark" parent="android:Theme.Material.Light">
+    <style name="Theme.LLMBatteryBenchmark" parent="Theme.AppCompat.Light.DarkActionBar">
         <item name="android:colorPrimary">@color/primary_color</item>
         <item name="android:colorPrimaryDark">@color/primary_dark_color</item>
         <item name="android:colorAccent">@color/accent_color</item>

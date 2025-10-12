@@ -134,26 +134,26 @@
             android:name="com.research.llmbattery.supported_models"
             android:value="llama,alpaca,vicuna" />
 
-        <!-- Queryable activities for external apps -->
-        <queries>
-            <!-- For battery optimization settings -->
-            <intent>
-                <action android:name="android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
-            </intent>
-            
-            <!-- For file sharing -->
-            <intent>
-                <action android:name="android.intent.action.SEND" />
-                <data android:mimeType="text/csv" />
-            </intent>
-            
-            <!-- For external storage access -->
-            <intent>
-                <action android:name="android.intent.action.OPEN_DOCUMENT" />
-                <data android:mimeType="*/*" />
-            </intent>
-        </queries>
-
     </application>
+
+    <!-- Queryable activities for external apps -->
+    <queries>
+        <!-- For battery optimization settings -->
+        <intent>
+            <action android:name="android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+        </intent>
+        
+        <!-- For file sharing -->
+        <intent>
+            <action android:name="android.intent.action.SEND" />
+            <data android:mimeType="text/csv" />
+        </intent>
+        
+        <!-- For external storage access -->
+        <intent>
+            <action android:name="android.intent.action.OPEN_DOCUMENT" />
+            <data android:mimeType="*/*" />
+        </intent>
+    </queries>
 
 </manifest>

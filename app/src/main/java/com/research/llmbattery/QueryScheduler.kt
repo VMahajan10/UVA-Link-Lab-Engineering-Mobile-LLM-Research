@@ -187,19 +187,19 @@ class QueryScheduler(
             // Check if LLM service is available
             if (!::llmService.isInitialized) {
                 Log.e(TAG, "LLMService not initialized")
-                return Result.failure()
+                return@withContext Result.failure()
             }
             
             // Check battery level before executing query
             if (!isBatteryLevelAcceptable()) {
                 Log.w(TAG, "Battery level too low, skipping query execution")
-                return Result.retry()
+                return@withContext Result.retry()
             }
             
             // Check if device is in power save mode
             if (isPowerSaveMode()) {
                 Log.w(TAG, "Device in power save mode, skipping query execution")
-                return Result.retry()
+                return@withContext Result.retry()
             }
             
             // Execute the query
@@ -249,7 +249,7 @@ class QueryScheduler(
                 inferenceTimeMs = inferenceTimeMs,
                 batteryLevel = batteryLevel,
                 quantization = llmService.getQuantizationType(),
-                modelName = llmService.getModelName()
+                modelName = llmService.getModelName() ?: "unknown"
             )
             
         } catch (e: Exception) {
@@ -368,7 +368,7 @@ class QueryScheduler(
                     inferenceTimeMs = inferenceTimeMs,
                     batteryLevel = batteryLevel,
                     quantization = llmService.getQuantizationType(),
-                    modelName = llmService.getModelName()
+                    modelName = llmService.getModelName() ?: "unknown"
                 )
             } else {
                 Log.e(TAG, "Invalid query index: $queryIndex")

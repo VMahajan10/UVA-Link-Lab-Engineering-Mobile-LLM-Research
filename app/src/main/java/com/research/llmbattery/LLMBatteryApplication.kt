@@ -46,11 +46,7 @@ class LLMBatteryApplication : Application() {
      */
     private fun setupLogging() {
         // Configure logging levels based on build type
-        if (BuildConfig.DEBUG) {
-            Log.d(TAG, "Debug logging enabled")
-        } else {
-            Log.d(TAG, "Release logging enabled")
-        }
+        Log.d(TAG, "Logging enabled")
     }
     
     /**

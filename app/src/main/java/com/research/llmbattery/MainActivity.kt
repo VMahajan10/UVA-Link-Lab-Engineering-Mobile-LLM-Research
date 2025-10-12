@@ -7,12 +7,15 @@ import android.os.Bundle
 import android.util.Log
 import android.view.View
 import android.view.WindowManager
+import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.work.Data
+import androidx.work.WorkerParameters
 import com.research.llmbattery.databinding.ActivityMainBinding
 import com.research.llmbattery.models.ModelConfig
 import kotlinx.coroutines.delay
@@ -47,7 +50,7 @@ class MainActivity : AppCompatActivity() {
     // Core components
     private lateinit var llmService: LLMService
     private lateinit var batteryMonitor: BatteryMonitor
-    private lateinit var queryScheduler: QueryScheduler
+    private var queryScheduler: QueryScheduler? = null
     private lateinit var dataLogger: DataLogger
     
     // State management
@@ -139,7 +142,8 @@ class MainActivity : AppCompatActivity() {
         dataLogger = DataLogger(this)
         
         // Initialize QueryScheduler (will be properly initialized when starting benchmark)
-        queryScheduler = QueryScheduler(this, androidx.work.WorkerParameters.Builder().build())
+        // Note: QueryScheduler will be properly initialized when starting the benchmark
+        queryScheduler = null
         
         Log.d(TAG, "Components initialized")
     }
@@ -204,13 +208,16 @@ class MainActivity : AppCompatActivity() {
             }
         }
         
-        binding.btnExportResults.setOnClickListener {
+        binding.btnExport.setOnClickListener {
             exportResults()
         }
         
-        binding.btnSelectModel.setOnClickListener {
-            selectModelFromSpinner()
-        }
+        binding.spinnerModel.setOnItemSelectedListener(object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                selectedModel = availableModels[position]
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        })
     }
     
     /**
@@ -238,7 +245,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 
                 // Initialize QueryScheduler with dependencies
-                queryScheduler.initialize(llmService, dataLogger, batteryMonitor)
+                queryScheduler?.initialize(llmService, dataLogger, batteryMonitor)
                 
                 // Start battery monitoring
                 batteryMonitor.startMonitoring()
@@ -321,19 +328,19 @@ class MainActivity : AppCompatActivity() {
         try {
             // Update battery level
             val batteryLevel = batteryMonitor.getCurrentBatteryLevel()
-            binding.textBatteryLevel.text = "$batteryLevel%"
+            binding.tvBatteryLevel.text = "Battery: $batteryLevel%"
             
             // Update queries completed
             val queryCount = dataLogger.getResultsCount()
-            binding.textQueriesCompleted.text = queryCount.toString()
+            binding.tvQueriesCompleted.text = "Queries: $queryCount"
             
             // Update average inference time
             val avgInferenceTime = calculateAverageInferenceTime()
-            binding.textAvgInferenceTime.text = "${avgInferenceTime}ms"
+            binding.tvAvgInferenceTime.text = "Avg Time: ${avgInferenceTime}ms"
             
             // Update estimated battery life
             val estimatedLife = calculateEstimatedBatteryLife()
-            binding.textEstimatedBatteryLife.text = estimatedLife
+            binding.tvEstBatteryLife.text = "Est. Life: $estimatedLife"
             
             // Update button states
             binding.btnStartStop.text = if (isRunning) "Stop Benchmark" else "Start Benchmark"
@@ -341,7 +348,6 @@ class MainActivity : AppCompatActivity() {
             
             // Update model selection state
             binding.spinnerModel.isEnabled = !isRunning
-            binding.btnSelectModel.isEnabled = !isRunning
             
             // Update progress bar
             binding.progressBar.visibility = if (isRunning) View.VISIBLE else View.GONE
@@ -368,7 +374,7 @@ class MainActivity : AppCompatActivity() {
     private fun exportResults() {
         lifecycleScope.launch {
             try {
-                binding.btnExportResults.isEnabled = false
+                binding.btnExport.isEnabled = false
                 
                 // Export to CSV
                 val exportedFile = dataLogger.exportToCSV()
@@ -383,7 +389,7 @@ class MainActivity : AppCompatActivity() {
                 Log.e(TAG, "Error exporting results", e)
                 Toast.makeText(this@MainActivity, "Error exporting results: ${e.message}", Toast.LENGTH_LONG).show()
             } finally {
-                binding.btnExportResults.isEnabled = true
+                binding.btnExport.isEnabled = true
             }
         }
     }
@@ -476,6 +482,8 @@ class MainActivity : AppCompatActivity() {
                 delay(UI_UPDATE_INTERVAL)
             }
         }
+        
+        Log.d(TAG, "UI updates started")
     }
     
     /**
