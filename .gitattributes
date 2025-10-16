@@ -1,3 +1,4 @@
 *.zip filter=lfs diff=lfs merge=lfs -text
 android-sdk/**/* filter=lfs diff=lfs merge=lfs -text
 gradle-wrapper.zip filter=lfs diff=lfs merge=lfs -text
+*.gguf filter=lfs diff=lfs merge=lfs -text

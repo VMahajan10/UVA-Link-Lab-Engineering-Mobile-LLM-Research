@@ -129,8 +129,6 @@ Thumbs.db
 *.log
 
 # Large SDK files
-android-sdk-tools.zip
-gradle-wrapper.zip
 
 # Android Studio
 *.iml
@@ -187,6 +185,4 @@ Thumbs.db
 *.log
 
 # Large SDK files
-android-sdk-tools.zip
-gradle-wrapper.zip
 app/src/main/cpp/llama.cpp

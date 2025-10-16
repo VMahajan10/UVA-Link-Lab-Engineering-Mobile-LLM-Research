@@ -214,7 +214,7 @@ class MainActivity : AppCompatActivity() {
         
         binding.spinnerModel.setOnItemSelectedListener(object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                selectedModel = availableModels[position]
+                selectModelFromSpinner()
             }
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         })
@@ -236,11 +236,11 @@ class MainActivity : AppCompatActivity() {
                 binding.btnStartStop.isEnabled = false
                 
                 // Load the selected model
-                val modelName = selectedModel!!.modelName
-                val success = llmService.loadModel("$modelName.gguf")
+                val modelPath = selectedModel!!.modelPath
+                val success = llmService.loadModel(modelPath)
                 
                 if (!success) {
-                    Toast.makeText(this@MainActivity, "Failed to load model: $modelName", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@MainActivity, "Failed to load model: ${selectedModel!!.modelName}", Toast.LENGTH_LONG).show()
                     return@launch
                 }
                 
@@ -399,20 +399,31 @@ class MainActivity : AppCompatActivity() {
      */
     private fun loadAvailableModels() {
         try {
-            val modelFiles = LLMService.getAvailableModels(this)
-            
             availableModels.clear()
             
-            modelFiles.forEach { modelName ->
-                val quantization = detectQuantizationFromName(modelName)
-                val modelConfig = ModelConfig.create(
-                    modelName = modelName.removeSuffix(".gguf"),
-                    modelPath = "assets/models/$modelName",
-                    quantization = quantization,
-                    sizeInMB = 0f // Will be updated when model is loaded
+            // Add the downloaded GGUF models
+            val models = listOf(
+                ModelConfig(
+                    modelName = "Qwen2.5-0.5B (2-bit)",
+                    modelPath = "models/qwen2.5-0.5b-instruct-q2_k.gguf",
+                    quantization = "2-bit",
+                    sizeInMB = 200f
+                ),
+                ModelConfig(
+                    modelName = "Qwen2.5-0.5B (3-bit)",
+                    modelPath = "models/qwen2.5-0.5b-instruct-q3_k_m.gguf",
+                    quantization = "3-bit",
+                    sizeInMB = 250f
+                ),
+                ModelConfig(
+                    modelName = "Qwen2.5-0.5B (4-bit)",
+                    modelPath = "models/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+                    quantization = "4-bit",
+                    sizeInMB = 350f
                 )
-                availableModels.add(modelConfig)
-            }
+            )
+            
+            availableModels.addAll(models)
             
             // Update model spinner
             setupModelSpinner()

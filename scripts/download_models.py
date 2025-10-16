@@ -19,22 +19,22 @@ from pathlib import Path
 # Model configuration
 MODELS = [
     {
-        "repo_id": "irish-quant/Qwen-Qwen2.5-Coder-3B-Instruct-2bit",
-        "filename": "Qwen2.5-Coder-3B-Instruct-Q2_K.gguf",
+        "repo_id": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+        "filename": "qwen2.5-0.5b-instruct-q2_k.gguf",
         "local_dir": "models/2bit",
-        "description": "2-bit quantized (0.5B, smallest, fastest)"
+        "description": "2-bit quantized (~200MB, smallest, fastest)"
     },
     {
-        "repo_id": "irish-quant/Qwen-Qwen2.5-Coder-3B-Instruct-3bit",
-        "filename": "Qwen2.5-Coder-3B-Instruct-Q3_K_M.gguf", 
+        "repo_id": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+        "filename": "qwen2.5-0.5b-instruct-q3_k_m.gguf", 
         "local_dir": "models/3bit",
-        "description": "3-bit quantized (0.6B, balanced)"
+        "description": "3-bit quantized (~250MB, balanced)"
     },
     {
-        "repo_id": "irish-quant/Qwen-Qwen2.5-Coder-3B-Instruct-4bit",
-        "filename": "Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf",
+        "repo_id": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+        "filename": "qwen2.5-0.5b-instruct-q4_k_m.gguf",
         "local_dir": "models/4bit", 
-        "description": "4-bit quantized (highest quality)"
+        "description": "4-bit quantized (~350MB, highest quality)"
     }
 ]
 
@@ -123,7 +123,8 @@ def main():
     print("Mobile LLM Battery Benchmark - Model Downloader")
     print("=" * 50)
     print(f"Total models: {len(MODELS)}")
-    print("Models: Qwen2.5-Coder-3B-Instruct (2bit, 3bit, 4bit)")
+    print("Models: Qwen2.5-0.5B-Instruct-GGUF (2bit, 3bit, 4bit)")
+    print("Repository: Qwen/Qwen2.5-0.5B-Instruct-GGUF")
     
     # Download each model
     success_count = 0
