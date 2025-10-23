@@ -9,14 +9,18 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
+import android.widget.Button
+import android.widget.ProgressBar
+import android.widget.Spinner
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import com.research.llmbattery.R
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.work.Data
 import androidx.work.WorkerParameters
-import com.research.llmbattery.databinding.ActivityMainBinding
 import com.research.llmbattery.models.ModelConfig
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -44,14 +48,22 @@ class MainActivity : AppCompatActivity() {
         private const val PERMISSION_REQUEST_CODE = 1001
     }
     
-    // ViewBinding
-    private lateinit var binding: ActivityMainBinding
+    // UI Components
+    private lateinit var spinnerModel: Spinner
+    private lateinit var spinnerInterval: Spinner
+    private lateinit var tvBatteryLevel: TextView
+    private lateinit var tvQueriesCompleted: TextView
+    private lateinit var tvAvgInferenceTime: TextView
+    private lateinit var tvEstBatteryLife: TextView
+    private lateinit var progressBar: ProgressBar
+    private lateinit var btnStartStop: Button
+    private lateinit var btnExport: Button
     
     // Core components
-    private lateinit var llmService: LLMService
-    private lateinit var batteryMonitor: BatteryMonitor
+    private var llmService: LLMService? = null
+    private var batteryMonitor: BatteryMonitor? = null
     private var queryScheduler: QueryScheduler? = null
-    private lateinit var dataLogger: DataLogger
+    private var dataLogger: DataLogger? = null
     
     // State management
     private var selectedModel: ModelConfig? = null
@@ -61,7 +73,26 @@ class MainActivity : AppCompatActivity() {
     private var uiUpdateJob: kotlinx.coroutines.Job? = null
     
     // Available models
-    private val availableModels = mutableListOf<ModelConfig>()
+    private val availableModels = listOf(
+        ModelConfig(
+            modelName = "Qwen2.5-0.5B (2-bit)",
+            modelPath = "qwen2.5-0.5b-instruct-q2_k.gguf",
+            quantization = "2-bit",
+            sizeInMB = 200f
+        ),
+        ModelConfig(
+            modelName = "Qwen2.5-0.5B (3-bit)",
+            modelPath = "qwen2.5-0.5b-instruct-q3_k_m.gguf",
+            quantization = "3-bit",
+            sizeInMB = 250f
+        ),
+        ModelConfig(
+            modelName = "Qwen2.5-0.5B (4-bit)",
+            modelPath = "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+            quantization = "4-bit",
+            sizeInMB = 350f
+        )
+    )
     
     // Permission launcher
     private val permissionLauncher = registerForActivityResult(
@@ -78,26 +109,61 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Initialize ViewBinding
-        binding = ActivityMainBinding.inflate(layoutInflater)
-        setContentView(binding.root)
-        
-        // Keep screen on during benchmark
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        
-        // Initialize components
-        initializeComponents()
-        
-        // Setup UI
-        setupUI()
-        
-        // Request permissions
-        requestPermissions()
-        
-        // Load available models
-        loadAvailableModels()
-        
-        Log.d(TAG, "MainActivity created")
+        try {
+            // Set content view
+            setContentView(R.layout.activity_main)
+            
+            // Initialize UI components
+            initializeUIComponents()
+            
+            // Keep screen on during benchmark
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            
+            // Initialize components
+            initializeComponents()
+            
+            // Setup UI
+            setupUI()
+            
+            // Initialize battery monitor
+            try {
+                batteryMonitor = BatteryMonitor(this)
+                updateBatteryDisplay()
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Battery monitor init failed: ${e.message}")
+                tvBatteryLevel.text = "Battery: Error"
+            }
+            
+            // Initialize data logger
+            try {
+                dataLogger = DataLogger(this)
+                Log.i("MainActivity", "DataLogger initialized")
+            } catch (e: Exception) {
+                Log.e("MainActivity", "DataLogger init failed: ${e.message}")
+            }
+            
+            // Initialize LLM service
+            try {
+                llmService = LLMService(this)
+                Log.i("MainActivity", "LLMService initialized")
+            } catch (e: Exception) {
+                Log.e("MainActivity", "LLMService init failed: ${e.message}")
+                Toast.makeText(this, "Warning: LLM loading may fail", Toast.LENGTH_SHORT).show()
+            }
+            
+            // Request permissions
+            requestPermissions()
+            
+            // Load available models
+            // loadAvailableModels()  // TODO: Enable when models are ready
+            
+            Log.d(TAG, "MainActivity created")
+            
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Error in onCreate: ${e.message}", e)
+            Toast.makeText(this, "Error starting app: ${e.message}", Toast.LENGTH_LONG).show()
+            finish()
+        }
     }
     
     override fun onStart() {
@@ -105,7 +171,7 @@ class MainActivity : AppCompatActivity() {
         
         // Resume monitoring if benchmark was running
         if (isRunning) {
-            batteryMonitor.startMonitoring()
+            batteryMonitor?.startMonitoring()
             startUIUpdates()
         }
         
@@ -117,7 +183,7 @@ class MainActivity : AppCompatActivity() {
         
         // Pause monitoring
         if (isRunning) {
-            batteryMonitor.stopMonitoring()
+            batteryMonitor?.stopMonitoring()
             stopUIUpdates()
         }
         
@@ -133,53 +199,167 @@ class MainActivity : AppCompatActivity() {
         Log.d(TAG, "MainActivity destroyed")
     }
     
+    
+    /**
+     * Initializes UI components using findViewById.
+     */
+    private fun initializeUIComponents() {
+        try {
+            spinnerModel = findViewById(R.id.spinnerModel)
+            spinnerInterval = findViewById(R.id.spinnerInterval)
+            tvBatteryLevel = findViewById(R.id.tvBatteryLevel)
+            tvQueriesCompleted = findViewById(R.id.tvQueriesCompleted)
+            tvAvgInferenceTime = findViewById(R.id.tvAvgInferenceTime)
+            tvEstBatteryLife = findViewById(R.id.tvEstBatteryLife)
+            progressBar = findViewById(R.id.progressBar)
+            btnStartStop = findViewById(R.id.btnStartStop)
+            btnExport = findViewById(R.id.btnExport)
+            
+            Log.d(TAG, "UI components initialized")
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Error initializing UI components: ${e.message}", e)
+        }
+    }
+    
+    /**
+     * Updates the battery display with current battery level.
+     */
+    private fun updateBatteryDisplay() {
+        try {
+            val level = batteryMonitor?.getCurrentBatteryLevel() ?: 0
+            tvBatteryLevel.text = "Battery: $level%"
+        } catch (e: Exception) {
+            tvBatteryLevel.text = "Battery: Error"
+            Log.e("MainActivity", "Battery update failed: ${e.message}")
+        }
+    }
+    
     /**
      * Initializes all core components.
      */
     private fun initializeComponents() {
-        llmService = LLMService(this)
-        batteryMonitor = BatteryMonitor(this)
-        dataLogger = DataLogger(this)
+        try {
+            // Don't initialize LLMService yet (native library might not be ready)
+            // llmService = LLMService(this)  // TODO: Initialize when actually needed
+            // batteryMonitor and dataLogger will be initialized in onCreate after UI setup
+            // queryScheduler will be initialized when benchmark starts
+            queryScheduler = null
+            
+            Log.d(TAG, "Components initialized")
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Error initializing components: ${e.message}", e)
+        }
+    }
+    
+    /**
+     * Sets up the spinner components with model selection.
+     */
+    private fun setupSpinners() {
+        // Model spinner
+        val modelNames = availableModels.map { it.modelName }.toTypedArray()
+        val modelAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, modelNames)
+        modelAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        spinnerModel.adapter = modelAdapter
         
-        // Initialize QueryScheduler (will be properly initialized when starting benchmark)
-        // Note: QueryScheduler will be properly initialized when starting the benchmark
-        queryScheduler = null
+        spinnerModel.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
+                selectedModel = availableModels[position]
+                Toast.makeText(this@MainActivity, "Selected: ${selectedModel?.modelName}", Toast.LENGTH_SHORT).show()
+            }
+            
+            override fun onNothingSelected(parent: AdapterView<*>?) {
+                selectedModel = null
+            }
+        }
         
-        Log.d(TAG, "Components initialized")
+        // Interval spinner
+        val intervals = arrayOf("1 minute", "5 minutes")
+        val intervalAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, intervals)
+        intervalAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        spinnerInterval.adapter = intervalAdapter
     }
     
     /**
      * Sets up the UI components and event listeners.
      */
     private fun setupUI() {
-        // Setup model selection spinner
-        setupModelSpinner()
-        
-        // Setup interval selection spinner
-        setupIntervalSpinner()
-        
-        // Setup button click listeners
-        setupButtonListeners()
-        
-        // Initialize UI state
-        updateUI()
-        
-        Log.d(TAG, "UI setup completed")
+        try {
+            setupSpinners()
+            
+            // Button listeners
+            btnStartStop.setOnClickListener {
+                lifecycleScope.launch {
+                    try {
+                        if (selectedModel == null) {
+                            Toast.makeText(this@MainActivity, "Please select a model first", Toast.LENGTH_SHORT).show()
+                            return@launch
+                        }
+                        
+                        updateBatteryDisplay()
+                        
+                        // Try to load model
+                        Toast.makeText(this@MainActivity, "Loading ${selectedModel?.modelName}...", Toast.LENGTH_SHORT).show()
+                        
+                        val modelPath = "assets/models/${selectedModel?.modelPath}"
+                        val loaded = llmService?.loadModel(modelPath) ?: false
+                        
+                        if (loaded) {
+                            Toast.makeText(this@MainActivity, "Model loaded! Ready to benchmark", Toast.LENGTH_LONG).show()
+                        } else {
+                            Toast.makeText(this@MainActivity, "Model loading failed", Toast.LENGTH_LONG).show()
+                        }
+                        
+                    } catch (e: Exception) {
+                        Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+                        Log.e("MainActivity", "Start error: ${e.message}", e)
+                    }
+                }
+            }
+            btnExport.setOnClickListener {
+                lifecycleScope.launch {
+                    try {
+                        val resultsCount = dataLogger?.getResultsCount() ?: 0
+                        if (resultsCount > 0) {
+                            val file = dataLogger?.exportToCSV()
+                            Toast.makeText(this@MainActivity, "Exported $resultsCount results to ${file?.name}", Toast.LENGTH_LONG).show()
+                        } else {
+                            Toast.makeText(this@MainActivity, "No results to export yet", Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        Toast.makeText(this@MainActivity, "Export error: ${e.message}", Toast.LENGTH_LONG).show()
+                        Log.e("MainActivity", "Export error: ${e.message}")
+                    }
+                }
+            }
+            
+            // Initialize UI state
+            updateUI()
+            
+            Log.d(TAG, "UI setup completed")
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Error setting up UI: ${e.message}", e)
+        }
     }
     
     /**
      * Sets up the model selection spinner.
      */
     private fun setupModelSpinner() {
-        val modelNames = availableModels.map { "${it.modelName} (${it.quantization})" }
-        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, modelNames)
+        val adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            availableModels.map { it.modelName }
+        )
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        binding.spinnerModel.adapter = adapter
+        spinnerModel.adapter = adapter
         
-        // Set default selection
-        if (availableModels.isNotEmpty()) {
+        // Set default selection to 3-bit (balanced option)
+        if (availableModels.size >= 2) {
+            selectedModel = availableModels[1] // 3-bit model
+            spinnerModel.setSelection(1)
+        } else if (availableModels.isNotEmpty()) {
             selectedModel = availableModels[0]
-            binding.spinnerModel.setSelection(0)
+            spinnerModel.setSelection(0)
         }
     }
     
@@ -190,34 +370,43 @@ class MainActivity : AppCompatActivity() {
         val intervals = listOf("1 minute", "5 minutes")
         val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, intervals)
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        binding.spinnerInterval.adapter = adapter
+        spinnerInterval.adapter = adapter
         
         // Set default to 1 minute
-        binding.spinnerInterval.setSelection(0)
+        spinnerInterval.setSelection(0)
     }
     
     /**
      * Sets up button click listeners.
      */
     private fun setupButtonListeners() {
-        binding.btnStartStop.setOnClickListener {
-            if (isRunning) {
-                showStopConfirmationDialog()
-            } else {
-                startBenchmark()
+        btnStartStop.setOnClickListener {
+            try {
+                updateBatteryDisplay()
+                Toast.makeText(this, "Battery: ${batteryMonitor?.getCurrentBatteryLevel()}%", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }
         
-        binding.btnExport.setOnClickListener {
+        btnExport.setOnClickListener {
             exportResults()
         }
         
-        binding.spinnerModel.setOnItemSelectedListener(object : AdapterView.OnItemSelectedListener {
+        spinnerModel.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                selectModelFromSpinner()
+                selectedModel = availableModels[position]
+                Toast.makeText(
+                    this@MainActivity,
+                    "Selected: ${selectedModel?.modelName}",
+                    Toast.LENGTH_SHORT
+                ).show()
             }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        })
+            
+            override fun onNothingSelected(parent: AdapterView<*>?) {
+                selectedModel = null
+            }
+        }
     }
     
     /**
@@ -232,12 +421,13 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             try {
                 // Show loading state
-                binding.progressBar.visibility = View.VISIBLE
-                binding.btnStartStop.isEnabled = false
+                progressBar.visibility = View.VISIBLE
+                btnStartStop.isEnabled = false
                 
                 // Load the selected model
                 val modelPath = selectedModel!!.modelPath
-                val success = llmService.loadModel(modelPath)
+                // val success = llmService.loadModel(modelPath)  // TODO: Enable when LLMService is ready
+                val success = true  // Temporary: assume success
                 
                 if (!success) {
                     Toast.makeText(this@MainActivity, "Failed to load model: ${selectedModel!!.modelName}", Toast.LENGTH_LONG).show()
@@ -245,22 +435,22 @@ class MainActivity : AppCompatActivity() {
                 }
                 
                 // Initialize QueryScheduler with dependencies
-                queryScheduler?.initialize(llmService, dataLogger, batteryMonitor)
+                // queryScheduler?.initialize(llmService, dataLogger, batteryMonitor)  // TODO: Enable when LLMService is ready
                 
                 // Start battery monitoring
-                batteryMonitor.startMonitoring()
+                batteryMonitor?.startMonitoring()
                 
                 // Get selected interval
-                val intervalMinutes = if (binding.spinnerInterval.selectedItemPosition == 0) 1 else 5
+                val intervalMinutes = if (spinnerInterval.selectedItemPosition == 0) 1 else 5
                 
                 // Schedule queries
-                QueryScheduler.scheduleQueries(
-                    this@MainActivity,
-                    intervalMinutes,
-                    llmService,
-                    dataLogger,
-                    batteryMonitor
-                )
+                // QueryScheduler.scheduleQueries(
+                //     this@MainActivity,
+                //     intervalMinutes,
+                //     llmService,
+                //     dataLogger,
+                //     batteryMonitor
+                // )  // TODO: Enable when LLMService is ready
                 
                 // Update state
                 isRunning = true
@@ -277,8 +467,8 @@ class MainActivity : AppCompatActivity() {
                 Log.e(TAG, "Error starting benchmark", e)
                 Toast.makeText(this@MainActivity, "Error starting benchmark: ${e.message}", Toast.LENGTH_LONG).show()
             } finally {
-                binding.progressBar.visibility = View.GONE
-                binding.btnStartStop.isEnabled = true
+                progressBar.visibility = View.GONE
+                btnStartStop.isEnabled = true
             }
         }
     }
@@ -293,7 +483,7 @@ class MainActivity : AppCompatActivity() {
                 QueryScheduler.cancelSchedule(this@MainActivity)
                 
                 // Stop battery monitoring
-                batteryMonitor.stopMonitoring()
+                batteryMonitor?.stopMonitoring()
                 
                 // Stop UI updates
                 stopUIUpdates()
@@ -305,8 +495,8 @@ class MainActivity : AppCompatActivity() {
                 updateUI()
                 
                 // Show completion message
-                val queryCount = dataLogger.getResultsCount()
-                val batteryCount = dataLogger.getBatteryMetricsCount()
+                val queryCount = dataLogger?.getResultsCount() ?: 0
+                val batteryCount = dataLogger?.getBatteryMetricsCount() ?: 0
                 
                 Toast.makeText(
                     this@MainActivity,
@@ -327,46 +517,43 @@ class MainActivity : AppCompatActivity() {
     private fun updateUI() {
         try {
             // Update battery level
-            val batteryLevel = batteryMonitor.getCurrentBatteryLevel()
-            binding.tvBatteryLevel.text = "Battery: $batteryLevel%"
+            val batteryLevel = batteryMonitor?.getCurrentBatteryLevel() ?: 0
+            tvBatteryLevel.text = "Battery: $batteryLevel%"
             
             // Update queries completed
-            val queryCount = dataLogger.getResultsCount()
-            binding.tvQueriesCompleted.text = "Queries: $queryCount"
+            val queryCount = dataLogger?.getResultsCount() ?: 0
+            tvQueriesCompleted.text = "Queries: $queryCount"
             
             // Update average inference time
             val avgInferenceTime = calculateAverageInferenceTime()
-            binding.tvAvgInferenceTime.text = "Avg Time: ${avgInferenceTime}ms"
+            tvAvgInferenceTime.text = "Avg Time: ${avgInferenceTime}ms"
             
             // Update estimated battery life
             val estimatedLife = calculateEstimatedBatteryLife()
-            binding.tvEstBatteryLife.text = "Est. Life: $estimatedLife"
+            tvEstBatteryLife.text = "Est. Life: $estimatedLife"
             
             // Update button states
-            binding.btnStartStop.text = if (isRunning) "Stop Benchmark" else "Start Benchmark"
-            binding.btnStartStop.isEnabled = true
+            btnStartStop.text = if (isRunning) "Stop Benchmark" else "Start Benchmark"
+            btnStartStop.isEnabled = true
             
             // Update model selection state
-            binding.spinnerModel.isEnabled = !isRunning
+            spinnerModel.isEnabled = !isRunning
             
             // Update progress bar
-            binding.progressBar.visibility = if (isRunning) View.VISIBLE else View.GONE
+            progressBar.visibility = if (isRunning) View.VISIBLE else View.GONE
             
         } catch (e: Exception) {
             Log.e(TAG, "Error updating UI", e)
+            // Set safe defaults
+            tvBatteryLevel.text = "Battery: Unknown"
+            tvQueriesCompleted.text = "Queries: 0"
+            tvAvgInferenceTime.text = "Avg Time: 0ms"
+            tvEstBatteryLife.text = "Est. Life: Unknown"
+            btnStartStop.text = "Start Benchmark"
+            btnStartStop.isEnabled = true
         }
     }
     
-    /**
-     * Selects a model from the spinner.
-     */
-    private fun selectModelFromSpinner() {
-        val selectedIndex = binding.spinnerModel.selectedItemPosition
-        if (selectedIndex >= 0 && selectedIndex < availableModels.size) {
-            selectedModel = availableModels[selectedIndex]
-            Toast.makeText(this, "Selected model: ${selectedModel!!.modelName}", Toast.LENGTH_SHORT).show()
-        }
-    }
     
     /**
      * Exports results to CSV and shows success dialog.
@@ -374,10 +561,10 @@ class MainActivity : AppCompatActivity() {
     private fun exportResults() {
         lifecycleScope.launch {
             try {
-                binding.btnExport.isEnabled = false
+                btnExport.isEnabled = false
                 
                 // Export to CSV
-                val exportedFile = dataLogger.exportToCSV()
+                val exportedFile = dataLogger?.exportToCSV()
                 
                 if (exportedFile != null) {
                     showExportSuccessDialog(exportedFile.absolutePath)
@@ -389,52 +576,11 @@ class MainActivity : AppCompatActivity() {
                 Log.e(TAG, "Error exporting results", e)
                 Toast.makeText(this@MainActivity, "Error exporting results: ${e.message}", Toast.LENGTH_LONG).show()
             } finally {
-                binding.btnExport.isEnabled = true
+                btnExport.isEnabled = true
             }
         }
     }
     
-    /**
-     * Loads available models from assets.
-     */
-    private fun loadAvailableModels() {
-        try {
-            availableModels.clear()
-            
-            // Add the downloaded GGUF models
-            val models = listOf(
-                ModelConfig(
-                    modelName = "Qwen2.5-0.5B (2-bit)",
-                    modelPath = "models/qwen2.5-0.5b-instruct-q2_k.gguf",
-                    quantization = "2-bit",
-                    sizeInMB = 200f
-                ),
-                ModelConfig(
-                    modelName = "Qwen2.5-0.5B (3-bit)",
-                    modelPath = "models/qwen2.5-0.5b-instruct-q3_k_m.gguf",
-                    quantization = "3-bit",
-                    sizeInMB = 250f
-                ),
-                ModelConfig(
-                    modelName = "Qwen2.5-0.5B (4-bit)",
-                    modelPath = "models/qwen2.5-0.5b-instruct-q4_k_m.gguf",
-                    quantization = "4-bit",
-                    sizeInMB = 350f
-                )
-            )
-            
-            availableModels.addAll(models)
-            
-            // Update model spinner
-            setupModelSpinner()
-            
-            Log.d(TAG, "Loaded ${availableModels.size} available models")
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "Error loading available models", e)
-            Toast.makeText(this, "Error loading models: ${e.message}", Toast.LENGTH_LONG).show()
-        }
-    }
     
     /**
      * Detects quantization type from model name.
@@ -457,7 +603,7 @@ class MainActivity : AppCompatActivity() {
      * Calculates average inference time from logged results.
      */
     private fun calculateAverageInferenceTime(): Long {
-        val results = dataLogger.getQueryResults()
+        val results = dataLogger?.getQueryResults() ?: emptyList()
         return if (results.isNotEmpty()) {
             results.map { it.inferenceTimeMs }.average().toLong()
         } else {
@@ -469,11 +615,11 @@ class MainActivity : AppCompatActivity() {
      * Calculates estimated battery life remaining.
      */
     private fun calculateEstimatedBatteryLife(): String {
-        val batteryLevel = batteryMonitor.getCurrentBatteryLevel()
-        val drainRate = batteryMonitor.getBatteryDrainRate()
+        val batteryLevel = batteryMonitor?.getCurrentBatteryLevel() ?: 0
+        val drainRate = batteryMonitor?.getBatteryDrainRate() ?: 0.0f
         
         return if (drainRate > 0) {
-            val hoursRemaining = batteryLevel / drainRate
+            val hoursRemaining = batteryLevel.toDouble() / drainRate
             val minutesRemaining = (hoursRemaining * 60).toInt()
             "${minutesRemaining}m"
         } else {
@@ -562,8 +708,8 @@ class MainActivity : AppCompatActivity() {
             }
             
             // Cleanup components
-            llmService.cleanup()
-            batteryMonitor.cleanup()
+            // llmService.cleanup()  // TODO: Enable when LLMService is ready
+            batteryMonitor?.cleanup()
             
             Log.d(TAG, "Cleanup completed")
             

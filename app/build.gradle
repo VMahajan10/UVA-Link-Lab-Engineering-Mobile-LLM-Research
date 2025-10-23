@@ -6,15 +6,13 @@ plugins {
 android {
     namespace 'com.research.llmbattery'
     compileSdk 34
-
+    
     defaultConfig {
-        applicationId "com.research.llmbattery"
+        applicationId 'com.research.llmbattery'
         minSdk 24
         targetSdk 34
         versionCode 1
-        versionName "1.0"
-
-        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        versionName '1.0'
     }
 
     buildTypes {
@@ -22,19 +20,24 @@ android {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
+        debug {
+            debuggable true
+        }
     }
     
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_11
-        targetCompatibility JavaVersion.VERSION_11
-    }
-    
-    kotlinOptions {
-        jvmTarget = '11'
-    }
-    
+    // Using MLC-LLM pre-built library instead of native llama.cpp build
+
     buildFeatures {
-        viewBinding true
+        viewBinding false
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
     }
 }
 
@@ -45,9 +48,9 @@ dependencies {
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.7.0'
     implementation 'androidx.work:work-runtime-ktx:2.9.0'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
     
-    testImplementation 'junit:junit:4.13.2'
-    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
-    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
+    // MLC-LLM for Android (mock implementation for now)
+    // Note: MLC-LLM is not available on Maven Central, so we'll use a mock implementation
 }

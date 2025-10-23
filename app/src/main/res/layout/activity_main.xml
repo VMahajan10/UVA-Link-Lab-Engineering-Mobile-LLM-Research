@@ -2,174 +2,118 @@
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:padding="16dp"
-    android:background="@color/background_color">
+    android:padding="16dp">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical">
 
-        <!-- Header Section -->
-        <LinearLayout
+        <!-- Header -->
+        <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="20dp"
-            android:background="@drawable/card_background"
-            android:layout_marginBottom="16dp">
+            android:text="LLM Battery Benchmark"
+            android:textSize="24sp"
+            android:textStyle="bold"
+            android:gravity="center"
+            android:padding="16dp" />
 
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/app_name"
-                android:textSize="24sp"
-                android:textStyle="bold"
-                android:textColor="@color/text_primary"
-                android:gravity="center" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Measure power consumption of quantized models"
-                android:textSize="14sp"
-                android:textColor="@color/text_secondary"
-                android:gravity="center"
-                android:layout_marginTop="8dp" />
-
-        </LinearLayout>
-
-        <!-- Configuration Section -->
-        <LinearLayout
+        <!-- Model Selection -->
+        <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="20dp"
-            android:background="@drawable/card_background"
-            android:layout_marginBottom="16dp">
+            android:text="Select Model:"
+            android:textSize="16sp"
+            android:layout_marginTop="16dp" />
 
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Model Selection"
-                android:textSize="18sp"
-                android:textStyle="bold"
-                android:textColor="@color/text_primary"
-                android:layout_marginBottom="12dp" />
-
-            <Spinner
-                android:id="@+id/spinner_model"
-                android:layout_width="match_parent"
-                android:layout_height="48dp"
-                android:layout_marginBottom="16dp" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Query Interval"
-                android:textSize="18sp"
-                android:textStyle="bold"
-                android:textColor="@color/text_primary"
-                android:layout_marginBottom="12dp" />
-
-            <Spinner
-                android:id="@+id/spinner_interval"
-                android:layout_width="match_parent"
-                android:layout_height="48dp" />
-
-        </LinearLayout>
-
-        <!-- Status Section -->
-        <LinearLayout
+        <Spinner
+            android:id="@+id/spinnerModel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="20dp"
-            android:background="@drawable/card_background"
-            android:layout_marginBottom="16dp">
+            android:layout_marginTop="8dp"
+            android:minHeight="48dp" />
 
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Current Status"
-                android:textSize="18sp"
-                android:textStyle="bold"
-                android:textColor="@color/text_primary"
-                android:layout_marginBottom="16dp" />
-
-            <TextView
-                android:id="@+id/tv_battery_level"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Battery: 85%"
-                android:textSize="16sp"
-                android:textColor="@color/text_primary"
-                android:layout_marginBottom="8dp" />
-
-            <TextView
-                android:id="@+id/tv_queries_completed"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Queries: 0"
-                android:textSize="16sp"
-                android:textColor="@color/text_primary"
-                android:layout_marginBottom="8dp" />
-
-            <TextView
-                android:id="@+id/tv_avg_inference_time"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Avg Time: 0ms"
-                android:textSize="16sp"
-                android:textColor="@color/text_primary"
-                android:layout_marginBottom="8dp" />
-
-            <TextView
-                android:id="@+id/tv_est_battery_life"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Est. Life: 0 hours"
-                android:textSize="16sp"
-                android:textColor="@color/text_primary"
-                android:layout_marginBottom="16dp" />
-
-            <ProgressBar
-                android:id="@+id/progress_bar"
-                style="?android:attr/progressBarStyleHorizontal"
-                android:layout_width="match_parent"
-                android:layout_height="4dp"
-                android:visibility="gone" />
-
-        </LinearLayout>
-
-        <!-- Control Section -->
-        <LinearLayout
+        <!-- Interval Selection -->
+        <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical">
+            android:text="Query Interval:"
+            android:textSize="16sp"
+            android:layout_marginTop="16dp" />
 
-            <Button
-                android:id="@+id/btn_start_stop"
-                android:layout_width="match_parent"
-                android:layout_height="56dp"
-                android:text="Start Benchmark"
-                android:textSize="16sp"
-                android:textStyle="bold"
-                android:background="@drawable/button_primary"
-                android:textColor="@color/white"
-                android:layout_marginBottom="12dp" />
+        <Spinner
+            android:id="@+id/spinnerInterval"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:minHeight="48dp" />
 
-            <Button
-                android:id="@+id/btn_export"
-                android:layout_width="match_parent"
-                android:layout_height="56dp"
-                android:text="Export Results"
-                android:textSize="16sp"
-                android:background="@drawable/button_secondary"
-                android:textColor="@color/text_primary" />
+        <!-- Status Display -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Status"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:layout_marginTop="24dp" />
 
-        </LinearLayout>
+        <TextView
+            android:id="@+id/tvBatteryLevel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Battery: --"
+            android:textSize="14sp"
+            android:padding="8dp" />
+
+        <TextView
+            android:id="@+id/tvQueriesCompleted"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Queries: 0"
+            android:textSize="14sp"
+            android:padding="8dp" />
+
+        <TextView
+            android:id="@+id/tvAvgInferenceTime"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Avg Time: --"
+            android:textSize="14sp"
+            android:padding="8dp" />
+
+        <TextView
+            android:id="@+id/tvEstBatteryLife"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Est. Life: --"
+            android:textSize="14sp"
+            android:padding="8dp" />
+
+        <ProgressBar
+            android:id="@+id/progressBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:visibility="gone"
+            style="?android:attr/progressBarStyleHorizontal" />
+
+        <!-- Buttons -->
+        <Button
+            android:id="@+id/btnStartStop"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Start Benchmark"
+            android:layout_marginTop="24dp"
+            android:minHeight="48dp" />
+
+        <Button
+            android:id="@+id/btnExport"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Export Results"
+            android:layout_marginTop="8dp"
+            android:minHeight="48dp" />
 
     </LinearLayout>
-
 </ScrollView>

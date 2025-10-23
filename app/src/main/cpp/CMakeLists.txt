@@ -7,6 +7,17 @@ project("llama-jni")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Android-specific patches for llama.cpp
+set(LLAMA_BUILD_SERVER OFF CACHE BOOL "Disable llama server" FORCE)
+set(LLAMA_BUILD_TESTS OFF CACHE BOOL "Disable tests" FORCE)
+set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "Disable examples" FORCE)
+set(GGML_OPENMP OFF CACHE BOOL "Disable OpenMP" FORCE)
+set(GGML_METAL OFF CACHE BOOL "Disable Metal" FORCE)
+
+# Fix pthread_cancel issue
+add_compile_definitions(GGML_USE_CPU)
+add_compile_definitions(__ANDROID__)
+
 # Add llama.cpp as subdirectory
 add_subdirectory(llama.cpp)
 
@@ -58,6 +69,7 @@ target_compile_definitions(
     -DGGML_USE_HIPBLAS=0
     -DGGML_USE_CUDA=0
     -DGGML_USE_LLAMAFILE=0
+    -DGGML_COMPILER_SUPPORTS_FP16_FORMAT_I3E=0
 )
 
 # Optimization flags
@@ -70,6 +82,9 @@ target_compile_options(
     -fno-exceptions
     -fno-rtti
     -fPIC
+    -D_POSIX_C_SOURCE=200809L
+    -DANDROID
+    -D__ANDROID_API__=24
 )
 
 # Set properties for Android
