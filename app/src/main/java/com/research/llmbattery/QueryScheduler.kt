@@ -248,7 +248,7 @@ class QueryScheduler(
                 responseText = responseText,
                 inferenceTimeMs = inferenceTimeMs,
                 batteryLevel = batteryLevel,
-                quantization = llmService.getQuantizationType(),
+                quantization = llmService.quantizationType,
                 modelName = llmService.getModelName() ?: "unknown"
             )
             
@@ -367,7 +367,7 @@ class QueryScheduler(
                     responseText = responseText,
                     inferenceTimeMs = inferenceTimeMs,
                     batteryLevel = batteryLevel,
-                    quantization = llmService.getQuantizationType(),
+                    quantization = llmService.quantizationType,
                     modelName = llmService.getModelName() ?: "unknown"
                 )
             } else {
