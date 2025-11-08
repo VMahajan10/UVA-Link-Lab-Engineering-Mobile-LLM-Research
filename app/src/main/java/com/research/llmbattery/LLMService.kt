@@ -29,35 +29,35 @@ class LLMService(private val context: Context) {
     private var lastInferenceTimeMs: Long = 0
     
     /**
-     * Loads a model from the assets directory using MLC-LLM.
+     * Loads a model from external storage using MLC-LLM.
      * 
-     * @param assetPath Path to the model file in assets
+     * @param modelFileName Name of the model file (e.g., "qwen2.5-0.5b-instruct-q2_k.gguf")
      * @return True if model loaded successfully, false otherwise
      */
-    fun loadModel(assetPath: String): Boolean {
+    fun loadModel(modelFileName: String): Boolean {
         return try {
-            Log.i(TAG, "Loading model from assets: $assetPath")
+            Log.i(TAG, "Loading model: $modelFileName")
             
-            // Check if model exists in assets
-            if (!isModelAvailable(assetPath)) {
-                Log.e(TAG, "Model not found in assets: $assetPath")
+            // Look for model in external storage first
+            val externalModelFile = File("/sdcard/Download", modelFileName)
+            
+            if (!externalModelFile.exists()) {
+                Log.e(TAG, "Model not found in /sdcard/Download/: $modelFileName")
+                Log.e(TAG, "Please copy the model file to /sdcard/Download/ directory")
                 return false
             }
             
-            // Extract model from assets to internal storage
-            val modelFile = extractModelFromAssets(assetPath)
-            
             // Mock MLC engine initialization
-            engine = MockMLCEngine(modelFile.absolutePath)
+            engine = MockMLCEngine(externalModelFile.absolutePath)
             
-            modelPath = assetPath
+            modelPath = externalModelFile.absolutePath
             isModelLoaded = true
             
             // Detect quantization type from model name
-            quantizationType = detectQuantizationType(assetPath)
+            quantizationType = detectQuantizationType(modelFileName)
             
             Log.i(TAG, "Model loaded successfully")
-            Log.i(TAG, "Model path: ${modelFile.absolutePath}")
+            Log.i(TAG, "Model path: ${externalModelFile.absolutePath}")
             Log.i(TAG, "Quantization: $quantizationType")
             true
         } catch (e: Exception) {
@@ -166,27 +166,6 @@ class LLMService(private val context: Context) {
         Log.d(TAG, "LLMService cleaned up")
     }
     
-    /**
-     * Extracts a model file from assets to internal storage.
-     * 
-     * @param assetPath Path to the model file in assets
-     * @return File object pointing to the extracted model
-     */
-    private fun extractModelFromAssets(assetPath: String): File {
-        val outputFile = File(context.filesDir, assetPath.substringAfterLast("/"))
-        
-        if (outputFile.exists()) {
-            return outputFile
-        }
-        
-        context.assets.open(assetPath).use { input ->
-            outputFile.outputStream().use { output ->
-                input.copyTo(output)
-            }
-        }
-        
-        return outputFile
-    }
     
     /**
      * Detects the quantization type from the model name.
@@ -209,14 +188,15 @@ class LLMService(private val context: Context) {
     }
     
     /**
-     * Checks if a model file exists in the assets directory.
+     * Checks if a model file exists in external storage.
      * 
-     * @param assetPath Path to the model file in assets
+     * @param modelFileName Name of the model file
      * @return True if model exists, false otherwise
      */
-    private fun isModelAvailable(assetPath: String): Boolean {
+    fun isModelAvailable(modelFileName: String): Boolean {
         return try {
-            context.assets.open(assetPath).use { true }
+            val externalModelFile = File("/sdcard/Download", modelFileName)
+            externalModelFile.exists()
         } catch (e: Exception) {
             false
         }

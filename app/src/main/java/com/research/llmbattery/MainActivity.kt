@@ -24,6 +24,8 @@ import androidx.work.WorkerParameters
 import com.research.llmbattery.models.ModelConfig
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
@@ -115,15 +117,15 @@ class MainActivity : AppCompatActivity() {
             
             // Initialize UI components
             initializeUIComponents()
-            
-            // Keep screen on during benchmark
-            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            
-            // Initialize components
-            initializeComponents()
-            
-            // Setup UI
-            setupUI()
+        
+        // Keep screen on during benchmark
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        
+        // Initialize components
+        initializeComponents()
+        
+        // Setup UI
+        setupUI()
             
             // Initialize battery monitor
             try {
@@ -150,14 +152,14 @@ class MainActivity : AppCompatActivity() {
                 Log.e("MainActivity", "LLMService init failed: ${e.message}")
                 Toast.makeText(this, "Warning: LLM loading may fail", Toast.LENGTH_SHORT).show()
             }
-            
-            // Request permissions
-            requestPermissions()
-            
-            // Load available models
+        
+        // Request permissions
+        requestPermissions()
+        
+        // Load available models
             // loadAvailableModels()  // TODO: Enable when models are ready
-            
-            Log.d(TAG, "MainActivity created")
+        
+        Log.d(TAG, "MainActivity created")
             
         } catch (e: Exception) {
             Log.e("MainActivity", "Error in onCreate: ${e.message}", e)
@@ -297,21 +299,42 @@ class MainActivity : AppCompatActivity() {
                         
                         updateBatteryDisplay()
                         
-                        // Try to load model
+                        // Load model
                         Toast.makeText(this@MainActivity, "Loading ${selectedModel?.modelName}...", Toast.LENGTH_SHORT).show()
                         
-                        val modelPath = "assets/models/${selectedModel?.modelPath}"
-                        val loaded = llmService?.loadModel(modelPath) ?: false
+                        val modelFileName = selectedModel?.modelPath ?: ""
+                        val loaded = withContext(Dispatchers.IO) {
+                            llmService?.loadModel(modelFileName) ?: false
+                        }
                         
                         if (loaded) {
-                            Toast.makeText(this@MainActivity, "Model loaded! Ready to benchmark", Toast.LENGTH_LONG).show()
+                            Toast.makeText(this@MainActivity, "Model loaded! Testing inference...", Toast.LENGTH_SHORT).show()
+                            
+                            // Test inference
+                            val testPrompt = "What is 2+2?"
+                            val startTime = System.currentTimeMillis()
+                            
+                            val response = withContext(Dispatchers.IO) {
+                                llmService?.generateResponse(testPrompt) ?: "Error"
+                            }
+                            
+                            val inferenceTime = System.currentTimeMillis() - startTime
+                            
+                            // Update UI
+                            tvAvgInferenceTime.text = "Inference: ${inferenceTime}ms"
+                            
+                            Toast.makeText(
+                                this@MainActivity, 
+                                "Response: $response\nTime: ${inferenceTime}ms",
+                                Toast.LENGTH_LONG
+                            ).show()
                         } else {
-                            Toast.makeText(this@MainActivity, "Model loading failed", Toast.LENGTH_LONG).show()
+                            Toast.makeText(this@MainActivity, "Model not found. Please copy ${selectedModel?.modelPath} to /sdcard/Download/", Toast.LENGTH_LONG).show()
                         }
                         
                     } catch (e: Exception) {
                         Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_LONG).show()
-                        Log.e("MainActivity", "Start error: ${e.message}", e)
+                        Log.e("MainActivity", "Error: ${e.message}", e)
                     }
                 }
             }
@@ -331,11 +354,11 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
-            
-            // Initialize UI state
-            updateUI()
-            
-            Log.d(TAG, "UI setup completed")
+        
+        // Initialize UI state
+        updateUI()
+        
+        Log.d(TAG, "UI setup completed")
         } catch (e: Exception) {
             Log.e("MainActivity", "Error setting up UI: ${e.message}", e)
         }

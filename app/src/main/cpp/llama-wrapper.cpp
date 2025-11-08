@@ -1,347 +1,243 @@
 #include <jni.h>
 #include <android/log.h>
 #include <string>
-#include <memory>
 #include <vector>
-#include <cstring>
+#include "llama.cpp/include/llama.h"
 
-// llama.cpp headers
-#include "llama.h"
+#define TAG "LLamaJNI"
+#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-// Android logging macros
-#define LOG_TAG "llama-jni"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
-#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
-
-// Structure to hold both model and context pointers
-struct LlamaContext {
+struct llama_context_wrapper {
     llama_model* model;
     llama_context* ctx;
-    
-    LlamaContext() : model(nullptr), ctx(nullptr) {}
-    
-    ~LlamaContext() {
-        if (ctx) {
-            llama_free(ctx);
-            ctx = nullptr;
-        }
-        if (model) {
-            llama_free_model(model);
-            model = nullptr;
-        }
-    }
-    
-    bool isValid() const {
-        return model != nullptr && ctx != nullptr;
-    }
 };
 
-// Helper function to convert jstring to std::string
-std::string jstring_to_string(JNIEnv* env, jstring jstr) {
-    if (jstr == nullptr) {
-        return "";
+// Helper: Convert jstring to C++ string
+std::string jstring2string(JNIEnv* env, jstring jStr) {
+    if (!jStr) return "";
+    const char* chars = env->GetStringUTFChars(jStr, nullptr);
+    std::string str(chars);
+    env->ReleaseStringUTFChars(jStr, chars);
+    return str;
+}
+
+// Helper: Clear batch
+void batch_clear(llama_batch& batch) {
+    batch.n_tokens = 0;
+}
+
+// Helper: Add token to batch
+void batch_add(llama_batch& batch, llama_token id, llama_pos pos, const std::vector<llama_seq_id>& seq_ids, bool logits) {
+    if (batch.n_tokens >= 512) {
+        LOGE("Batch size exceeded");
+        return;
     }
-    
-    const char* cstr = env->GetStringUTFChars(jstr, nullptr);
-    if (cstr == nullptr) {
-        return "";
+    batch.token[batch.n_tokens] = id;
+    batch.pos[batch.n_tokens] = pos;
+    batch.n_seq_id[batch.n_tokens] = seq_ids.size();
+    for (size_t i = 0; i < seq_ids.size(); i++) {
+        batch.seq_id[batch.n_tokens][i] = seq_ids[i];
     }
-    
-    std::string result(cstr);
-    env->ReleaseStringUTFChars(jstr, cstr);
+    batch.logits[batch.n_tokens] = logits;
+    batch.n_tokens++;
+}
+
+// Helper: Tokenize text
+std::vector<llama_token> tokenize(const llama_vocab* vocab, const std::string& text, bool add_special) {
+    int n_tokens = text.length() + 2 * add_special;
+    std::vector<llama_token> result(n_tokens);
+    n_tokens = llama_tokenize(vocab, text.data(), text.length(), result.data(), result.size(), add_special, false);
+    if (n_tokens < 0) {
+        result.resize(-n_tokens);
+        n_tokens = llama_tokenize(vocab, text.data(), text.length(), result.data(), result.size(), add_special, false);
+    }
+    result.resize(n_tokens);
     return result;
 }
 
-// Helper function to convert std::string to jstring
-jstring string_to_jstring(JNIEnv* env, const std::string& str) {
-    return env->NewStringUTF(str.c_str());
+// Helper: Convert token to piece
+std::string token_to_piece(const llama_vocab* vocab, llama_token token) {
+    std::string piece;
+    piece.resize(256);
+    int n_chars = llama_token_to_piece(vocab, token, &piece[0], piece.size(), 0, false);
+    if (n_chars < 0) {
+        piece.resize(-n_chars);
+        n_chars = llama_token_to_piece(vocab, token, &piece[0], piece.size(), 0, false);
+    } else {
+        piece.resize(n_chars);
+    }
+    return piece;
 }
 
-// Helper function to safely cast jlong to LlamaContext pointer
-LlamaContext* jlong_to_context(jlong ptr) {
-    return reinterpret_cast<LlamaContext*>(ptr);
-}
+extern "C" {
 
-// Helper function to safely cast LlamaContext pointer to jlong
-jlong context_to_jlong(LlamaContext* ctx) {
-    return reinterpret_cast<jlong>(ctx);
-}
-
-/**
- * Initialize llama.cpp context with the given model path
- * 
- * JNI Name Mangling: Java_com_research_llmbattery_LLMService_initializeNative
- * - Java_ prefix for all JNI functions
- * - com_research_llmbattery_LLMService: Full class name with underscores
- * - initializeNative: Method name
- * 
- * @param env JNI environment
- * @param obj Java object instance
- * @param modelPath Path to the GGUF model file
- * @return Pointer to llama context as jlong, or 0 if failed
- */
-extern "C" JNIEXPORT jlong JNICALL
-Java_com_research_llmbattery_LLMService_initializeNative(
-    JNIEnv* env,
-    jobject obj,
-    jstring modelPath
+// Initialize llama.cpp with model
+JNIEXPORT jlong JNICALL
+Java_com_research_llmbattery_LLMService_nativeInit(
+    JNIEnv* env, 
+    jobject /* this */,
+    jstring jModelPath,
+    jint nThreads,
+    jint nCtx
 ) {
-    LOGI("Initializing llama context with model path");
+    std::string modelPath = jstring2string(env, jModelPath);
+    LOGD("Initializing model: %s", modelPath.c_str());
     
-    try {
-        // Convert Java string to C++ string
-        std::string model_path = jstring_to_string(env, modelPath);
-        if (model_path.empty()) {
-            LOGE("Model path is empty");
-            return 0;
-        }
-        
-        LOGD("Model path: %s", model_path.c_str());
-        
-        // Initialize llama backend
-        llama_backend_init();
-        LOGD("Initialized llama backend");
-        
-        // Set model parameters
-        llama_model_params model_params = llama_model_default_params();
-        model_params.n_gpu_layers = 0; // CPU only for mobile
-        
-        // Load model
-        llama_model* model = llama_load_model_from_file(model_path.c_str(), model_params);
-        if (model == nullptr) {
-            LOGE("Failed to load model from: %s", model_path.c_str());
-            llama_backend_free();
-            return 0;
-        }
-        
-        LOGI("Successfully loaded model");
-        
-        // Set context parameters optimized for mobile
-        llama_context_params ctx_params = llama_context_default_params();
-        ctx_params.seed = 42;
-        ctx_params.ctx_size = 2048;  // Context window size
-        ctx_params.n_batch = 512;    // Batch size
-        ctx_params.n_threads = 4;    // Number of threads for mobile
-        ctx_params.n_ctx = 2048;     // Context size
-        ctx_params.rope_freq_base = 10000.0f;
-        ctx_params.rope_freq_scale = 1.0f;
-        
-        // Create context
-        llama_context* ctx = llama_new_context_with_model(model, ctx_params);
-        if (ctx == nullptr) {
-            LOGE("Failed to create llama context");
-            llama_free_model(model);
-            llama_backend_free();
-            return 0;
-        }
-        
-        LOGI("Successfully created llama context");
-        
-        // Create wrapper structure
-        LlamaContext* llama_ctx = new LlamaContext();
-        llama_ctx->model = model;
-        llama_ctx->ctx = ctx;
-        
-        LOGI("Successfully initialized llama context");
-        return context_to_jlong(llama_ctx);
-        
-    } catch (const std::exception& e) {
-        LOGE("Exception in initializeNative: %s", e.what());
-        llama_backend_free();
-        return 0;
-    } catch (...) {
-        LOGE("Unknown exception in initializeNative");
-        llama_backend_free();
+    // Initialize llama backend
+    llama_backend_init();
+    
+    // Load model (updated API)
+    llama_model_params model_params = llama_model_default_params();
+    llama_model* model = llama_model_load_from_file(modelPath.c_str(), model_params);
+    
+    if (!model) {
+        LOGE("Failed to load model from %s", modelPath.c_str());
         return 0;
     }
+    
+    LOGD("Model loaded successfully");
+    
+    // Create context (updated API)
+    llama_context_params ctx_params = llama_context_default_params();
+    ctx_params.n_ctx = nCtx;
+    ctx_params.n_threads = nThreads;
+    ctx_params.n_threads_batch = nThreads;
+    
+    llama_context* ctx = llama_init_from_model(model, ctx_params);
+    
+    if (!ctx) {
+        LOGE("Failed to create context");
+        llama_model_free(model);
+        return 0;
+    }
+    
+    LOGD("Context created successfully");
+    
+    // Create wrapper
+    auto* wrapper = new llama_context_wrapper();
+    wrapper->model = model;
+    wrapper->ctx = ctx;
+    
+    return reinterpret_cast<jlong>(wrapper);
 }
 
-/**
- * Run inference with the given prompt
- * 
- * JNI Name Mangling: Java_com_research_llmbattery_LLMService_inferNative
- * 
- * @param env JNI environment
- * @param obj Java object instance
- * @param contextPtr Pointer to llama context
- * @param prompt Input prompt for inference
- * @return Generated response as jstring, or empty string if failed
- */
-extern "C" JNIEXPORT jstring JNICALL
-Java_com_research_llmbattery_LLMService_inferNative(
+// Generate text
+JNIEXPORT jstring JNICALL
+Java_com_research_llmbattery_LLMService_nativeGenerate(
     JNIEnv* env,
-    jobject obj,
+    jobject /* this */,
     jlong contextPtr,
-    jstring prompt
+    jstring jPrompt,
+    jint maxTokens
 ) {
-    LOGI("Running inference with prompt");
-    
-    try {
-        // Validate context pointer
-        if (contextPtr == 0) {
-            LOGE("Invalid context pointer");
-            return string_to_jstring(env, "");
-        }
-        
-        // Get context from pointer
-        LlamaContext* llama_ctx = jlong_to_context(contextPtr);
-        if (llama_ctx == nullptr || !llama_ctx->isValid()) {
-            LOGE("Invalid context pointer or context not initialized");
-            return string_to_jstring(env, "");
-        }
-        
-        // Convert Java string to C++ string
-        std::string prompt_str = jstring_to_string(env, prompt);
-        if (prompt_str.empty()) {
-            LOGE("Prompt is empty");
-            return string_to_jstring(env, "");
-        }
-        
-        LOGD("Prompt: %s", prompt_str.c_str());
-        
-        // Tokenize input
-        std::vector<llama_token> tokens_list;
-        tokens_list.resize(prompt_str.length() + 1);
-        
-        int n_tokens = llama_tokenize(llama_ctx->ctx, prompt_str.c_str(), prompt_str.length(), 
-                                     tokens_list.data(), tokens_list.size(), true);
-        if (n_tokens < 0) {
-            LOGE("Failed to tokenize input");
-            return string_to_jstring(env, "");
-        }
-        tokens_list.resize(n_tokens);
-        
-        LOGD("Tokenized %d tokens", n_tokens);
-        
-        // Create batch for initial tokens
-        llama_batch batch = llama_batch_init(512, 0);
-        batch.n_tokens = n_tokens;
-        
-        for (int i = 0; i < n_tokens; i++) {
-            batch.token[i] = tokens_list[i];
-            batch.pos[i] = i;
-            batch.n_seq_id[i] = 1;
-            batch.seq_id[i][0] = 0;
-            batch.logits[i] = (i == n_tokens - 1);
-        }
-        
-        // Decode initial batch
-        if (llama_decode(llama_ctx->ctx, batch) != 0) {
-            LOGE("Failed to decode initial batch");
-            llama_batch_free(batch);
-            return string_to_jstring(env, "");
-        }
-        
-        // Generate response
-        std::string response;
-        int max_tokens = 256; // Maximum response length
-        int n_ctx = llama_n_ctx(llama_ctx->ctx);
-        
-        for (int i = 0; i < max_tokens; i++) {
-            // Get logits for the last token
-            float* logits = llama_get_logits_ith(llama_ctx->ctx, batch.n_tokens - 1);
-            int n_vocab = llama_n_vocab(llama_ctx->model);
-            
-            // Sample next token (using greedy sampling for simplicity)
-            llama_token new_token_id = 0;
-            float max_logit = logits[0];
-            for (int j = 1; j < n_vocab; j++) {
-                if (logits[j] > max_logit) {
-                    max_logit = logits[j];
-                    new_token_id = j;
-                }
-            }
-            
-            // Check for end of sequence
-            if (new_token_id == llama_token_eos(llama_ctx->model)) {
-                LOGD("End of sequence token generated");
-                break;
-            }
-            
-            // Convert token to string and append
-            char token_str[256];
-            int n_chars = llama_token_to_piece(llama_ctx->model, new_token_id, token_str, 
-                                             sizeof(token_str), true);
-            if (n_chars > 0) {
-                response += std::string(token_str, n_chars);
-            }
-            
-            // Check if we've reached context limit
-            if (batch.n_tokens >= n_ctx - 1) {
-                LOGD("Reached context limit");
-                break;
-            }
-            
-            // Prepare next batch with single token
-            batch.n_tokens = 1;
-            batch.token[0] = new_token_id;
-            batch.pos[0] = batch.n_tokens - 1;
-            batch.n_seq_id[0] = 1;
-            batch.seq_id[0][0] = 0;
-            batch.logits[0] = true;
-            
-            // Decode next token
-            if (llama_decode(llama_ctx->ctx, batch) != 0) {
-                LOGE("Failed to decode next token");
-                break;
-            }
-        }
-        
-        // Cleanup
-        llama_batch_free(batch);
-        
-        LOGI("Generated response: %s", response.c_str());
-        return string_to_jstring(env, response);
-        
-    } catch (const std::exception& e) {
-        LOGE("Exception in inferNative: %s", e.what());
-        return string_to_jstring(env, "");
-    } catch (...) {
-        LOGE("Unknown exception in inferNative");
-        return string_to_jstring(env, "");
+    if (contextPtr == 0) {
+        LOGE("Invalid context pointer");
+        return env->NewStringUTF("Error: Invalid context");
     }
+    
+    auto* wrapper = reinterpret_cast<llama_context_wrapper*>(contextPtr);
+    std::string prompt = jstring2string(env, jPrompt);
+    
+    LOGD("Generating response for prompt: %s", prompt.c_str());
+    
+    // Get vocab
+    const llama_vocab* vocab = llama_model_get_vocab(wrapper->model);
+    
+    // Tokenize prompt
+    std::vector<llama_token> tokens = tokenize(vocab, prompt, true);
+    int n_tokens = tokens.size();
+    
+    LOGD("Tokenized prompt: %d tokens", n_tokens);
+    
+    // Generate response
+    std::string response;
+    
+    // Create batch
+    llama_batch batch = llama_batch_init(512, 0, 1);
+    
+    // Add prompt tokens
+    for (int i = 0; i < n_tokens; i++) {
+        batch_add(batch, tokens[i], i, {0}, false);
+    }
+    batch.logits[batch.n_tokens - 1] = true;
+    
+    // Decode prompt
+    if (llama_decode(wrapper->ctx, batch) != 0) {
+        LOGE("Failed to decode prompt");
+        llama_batch_free(batch);
+        return env->NewStringUTF("Error: Failed to decode");
+    }
+    
+    // Generate tokens
+    int n_generated = 0;
+    int n_vocab = llama_vocab_n_tokens(vocab);
+    
+    while (n_generated < maxTokens) {
+        // Sample next token (greedy)
+        auto* logits = llama_get_logits_ith(wrapper->ctx, batch.n_tokens - 1);
+        
+        llama_token new_token_id = 0;
+        float max_logit = logits[0];
+        for (int i = 1; i < n_vocab; i++) {
+            if (logits[i] > max_logit) {
+                max_logit = logits[i];
+                new_token_id = i;
+            }
+        }
+        
+        // Check for EOS (updated API)
+        if (llama_vocab_is_eog(vocab, new_token_id)) {
+            break;
+        }
+        
+        // Decode token to text
+        std::string piece = token_to_piece(vocab, new_token_id);
+        response += piece;
+        
+        // Prepare next batch
+        batch_clear(batch);
+        batch_add(batch, new_token_id, n_tokens + n_generated, {0}, true);
+        
+        // Decode
+        if (llama_decode(wrapper->ctx, batch) != 0) {
+            LOGE("Failed to decode token");
+            break;
+        }
+        
+        n_generated++;
+    }
+    
+    llama_batch_free(batch);
+    
+    LOGD("Generated %d tokens", n_generated);
+    
+    return env->NewStringUTF(response.c_str());
 }
 
-/**
- * Free llama context and cleanup resources
- * 
- * JNI Name Mangling: Java_com_research_llmbattery_LLMService_freeNative
- * 
- * @param env JNI environment
- * @param obj Java object instance
- * @param contextPtr Pointer to llama context to free
- */
-extern "C" JNIEXPORT void JNICALL
-Java_com_research_llmbattery_LLMService_freeNative(
+// Free resources
+JNIEXPORT void JNICALL
+Java_com_research_llmbattery_LLMService_nativeFree(
     JNIEnv* env,
-    jobject obj,
+    jobject /* this */,
     jlong contextPtr
 ) {
-    LOGI("Freeing llama context");
+    if (contextPtr == 0) return;
     
-    try {
-        // Validate context pointer
-        if (contextPtr == 0) {
-            LOGE("Invalid context pointer for cleanup");
-            return;
-        }
-        
-        // Get context from pointer
-        LlamaContext* llama_ctx = jlong_to_context(contextPtr);
-        if (llama_ctx == nullptr) {
-            LOGE("Invalid context pointer for cleanup");
-            return;
-        }
-        
-        // Free context and model using the destructor
-        delete llama_ctx;
-        
-        LOGI("Successfully freed llama context and model");
-        
-    } catch (const std::exception& e) {
-        LOGE("Exception in freeNative: %s", e.what());
-    } catch (...) {
-        LOGE("Unknown exception in freeNative");
+    auto* wrapper = reinterpret_cast<llama_context_wrapper*>(contextPtr);
+    
+    if (wrapper->ctx) {
+        llama_free(wrapper->ctx);
     }
+    if (wrapper->model) {
+        llama_model_free(wrapper->model);
+    }
+    
+    delete wrapper;
+    
+    llama_backend_free();
+    
+    LOGD("Resources freed");
 }
+
+} // extern "C"
