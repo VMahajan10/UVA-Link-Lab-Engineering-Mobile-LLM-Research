@@ -2,7 +2,10 @@ package com.research.llmbattery
 
 import android.Manifest
 import android.app.AlertDialog
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.view.View
@@ -10,6 +13,7 @@ import android.view.WindowManager
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.EditText
 import android.widget.ProgressBar
 import android.widget.Spinner
 import android.widget.TextView
@@ -20,7 +24,11 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.work.Data
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import java.util.concurrent.TimeUnit
 import com.research.llmbattery.models.ModelConfig
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -48,11 +56,19 @@ class MainActivity : AppCompatActivity() {
         private const val TAG = "MainActivity"
         private const val UI_UPDATE_INTERVAL = 5000L // 5 seconds
         private const val PERMISSION_REQUEST_CODE = 1001
+        const val WORK_NAME_DURATION_EXPIRED = "duration_expired_work"
+        const val KEY_DURATION_HOURS = "duration_hours"
+        
+        // Cancel duration work when stopping manually
+        fun cancelDurationWork(context: Context) {
+            WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME_DURATION_EXPIRED)
+        }
     }
     
     // UI Components
     private lateinit var spinnerModel: Spinner
     private lateinit var spinnerInterval: Spinner
+    private lateinit var etDuration: EditText
     private lateinit var tvBatteryLevel: TextView
     private lateinit var tvQueriesCompleted: TextView
     private lateinit var tvAvgInferenceTime: TextView
@@ -209,6 +225,7 @@ class MainActivity : AppCompatActivity() {
         try {
             spinnerModel = findViewById(R.id.spinnerModel)
             spinnerInterval = findViewById(R.id.spinnerInterval)
+            etDuration = findViewById(R.id.etDuration)
             tvBatteryLevel = findViewById(R.id.tvBatteryLevel)
             tvQueriesCompleted = findViewById(R.id.tvQueriesCompleted)
             tvAvgInferenceTime = findViewById(R.id.tvAvgInferenceTime)
@@ -290,52 +307,12 @@ class MainActivity : AppCompatActivity() {
             
             // Button listeners
             btnStartStop.setOnClickListener {
-                lifecycleScope.launch {
-                    try {
-                        if (selectedModel == null) {
-                            Toast.makeText(this@MainActivity, "Please select a model first", Toast.LENGTH_SHORT).show()
-                            return@launch
-                        }
-                        
-                        updateBatteryDisplay()
-                        
-                        // Load model
-                        Toast.makeText(this@MainActivity, "Loading ${selectedModel?.modelName}...", Toast.LENGTH_SHORT).show()
-                        
-                        val modelFileName = selectedModel?.modelPath ?: ""
-                        val loaded = withContext(Dispatchers.IO) {
-                            llmService?.loadModel(modelFileName) ?: false
-                        }
-                        
-                        if (loaded) {
-                            Toast.makeText(this@MainActivity, "Model loaded! Testing inference...", Toast.LENGTH_SHORT).show()
-                            
-                            // Test inference
-                            val testPrompt = "What is 2+2?"
-                            val startTime = System.currentTimeMillis()
-                            
-                            val response = withContext(Dispatchers.IO) {
-                                llmService?.generateResponse(testPrompt) ?: "Error"
-                            }
-                            
-                            val inferenceTime = System.currentTimeMillis() - startTime
-                            
-                            // Update UI
-                            tvAvgInferenceTime.text = "Inference: ${inferenceTime}ms"
-                            
-                            Toast.makeText(
-                                this@MainActivity, 
-                                "Response: $response\nTime: ${inferenceTime}ms",
-                                Toast.LENGTH_LONG
-                            ).show()
-                        } else {
-                            Toast.makeText(this@MainActivity, "Model not found. Please copy ${selectedModel?.modelPath} to /sdcard/Download/", Toast.LENGTH_LONG).show()
-                        }
-                        
-                    } catch (e: Exception) {
-                        Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_LONG).show()
-                        Log.e("MainActivity", "Error: ${e.message}", e)
-                    }
+                if (isRunning) {
+                    // Stop benchmark
+                    stopBenchmark()
+                } else {
+                    // Start benchmark (validate duration first)
+                    startBenchmarkWithDuration()
                 }
             }
             btnExport.setOnClickListener {
@@ -413,7 +390,8 @@ class MainActivity : AppCompatActivity() {
         }
         
         btnExport.setOnClickListener {
-            exportResults()
+            // Show results dialog first, with option to export
+            showResultsDialog()
         }
         
         spinnerModel.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
@@ -433,47 +411,98 @@ class MainActivity : AppCompatActivity() {
     }
     
     /**
-     * Starts the battery benchmark with the selected model and interval.
+     * Validates duration and starts the benchmark.
      */
-    private fun startBenchmark() {
+    private fun startBenchmarkWithDuration() {
         if (selectedModel == null) {
             Toast.makeText(this, "Please select a model first", Toast.LENGTH_SHORT).show()
             return
         }
         
+        // Get duration from EditText
+        val durationText = etDuration.text.toString().trim()
+        if (durationText.isEmpty()) {
+            Toast.makeText(this, "Please enter benchmark duration", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
+        val durationHours = try {
+            durationText.toDouble()
+        } catch (e: NumberFormatException) {
+            Toast.makeText(this, "Invalid duration. Please enter a number.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
+        if (durationHours <= 0) {
+            Toast.makeText(this, "Duration must be greater than 0", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
+        // Start benchmark
+        startBenchmark(durationHours)
+    }
+    
+    /**
+     * Starts the battery benchmark with the selected model and interval.
+     * Loads the model, starts battery monitoring, and schedules automated queries.
+     */
+    private fun startBenchmark(durationHours: Double) {
         lifecycleScope.launch {
             try {
                 // Show loading state
                 progressBar.visibility = View.VISIBLE
                 btnStartStop.isEnabled = false
                 
-                // Load the selected model
-                val modelPath = selectedModel!!.modelPath
-                // val success = llmService.loadModel(modelPath)  // TODO: Enable when LLMService is ready
-                val success = true  // Temporary: assume success
+                // Ensure all services are initialized
+                if (llmService == null) {
+                    llmService = LLMService(this@MainActivity)
+                }
+                if (batteryMonitor == null) {
+                    batteryMonitor = BatteryMonitor(this@MainActivity)
+                }
+                if (dataLogger == null) {
+                    dataLogger = DataLogger(this@MainActivity)
+                }
                 
-                if (!success) {
+                // Update battery display
+                updateBatteryDisplay()
+                
+                // Load the selected model
+                Toast.makeText(this@MainActivity, "Loading ${selectedModel!!.modelName}...", Toast.LENGTH_SHORT).show()
+                val modelPath = selectedModel!!.modelPath
+                val loaded = withContext(Dispatchers.IO) {
+                    llmService?.loadModel(modelPath) ?: false
+                }
+                
+                if (!loaded) {
                     Toast.makeText(this@MainActivity, "Failed to load model: ${selectedModel!!.modelName}", Toast.LENGTH_LONG).show()
                     return@launch
                 }
                 
-                // Initialize QueryScheduler with dependencies
-                // queryScheduler?.initialize(llmService, dataLogger, batteryMonitor)  // TODO: Enable when LLMService is ready
+                Toast.makeText(this@MainActivity, "Model loaded! Starting benchmark...", Toast.LENGTH_SHORT).show()
                 
                 // Start battery monitoring
                 batteryMonitor?.startMonitoring()
+                Log.i(TAG, "Battery monitoring started")
                 
-                // Get selected interval
+                // Get selected interval from spinner
                 val intervalMinutes = if (spinnerInterval.selectedItemPosition == 0) 1 else 5
                 
-                // Schedule queries
-                // QueryScheduler.scheduleQueries(
-                //     this@MainActivity,
-                //     intervalMinutes,
-                //     llmService,
-                //     dataLogger,
-                //     batteryMonitor
-                // )  // TODO: Enable when LLMService is ready
+                // Schedule automated queries using QueryScheduler
+                // Pass model path so Worker can load the model
+                QueryScheduler.scheduleQueries(
+                    this@MainActivity,
+                    intervalMinutes,
+                    llmService!!,
+                    dataLogger!!,
+                    batteryMonitor!!,
+                    modelPath
+                )
+                Log.i(TAG, "Scheduled queries every $intervalMinutes minute(s)")
+                
+                // Schedule duration expired worker to stop benchmark and export results
+                scheduleDurationExpiredWorker(durationHours)
+                Log.i(TAG, "Scheduled duration expired worker for $durationHours hours")
                 
                 // Update state
                 isRunning = true
@@ -484,11 +513,19 @@ class MainActivity : AppCompatActivity() {
                 // Update UI
                 updateUI()
                 
-                Toast.makeText(this@MainActivity, "Benchmark started", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this@MainActivity,
+                    "Benchmark started! Will run for $durationHours hour(s). Results will be saved to CSV files.",
+                    Toast.LENGTH_LONG
+                ).show()
+                
+                Log.i(TAG, "Benchmark started successfully")
                 
             } catch (e: Exception) {
                 Log.e(TAG, "Error starting benchmark", e)
                 Toast.makeText(this@MainActivity, "Error starting benchmark: ${e.message}", Toast.LENGTH_LONG).show()
+                isRunning = false
+                updateUI()
             } finally {
                 progressBar.visibility = View.GONE
                 btnStartStop.isEnabled = true
@@ -505,6 +542,9 @@ class MainActivity : AppCompatActivity() {
                 // Stop query scheduling
                 QueryScheduler.cancelSchedule(this@MainActivity)
                 
+                // Cancel duration expired work (if stopping manually)
+                cancelDurationWork(this@MainActivity)
+                
                 // Stop battery monitoring
                 batteryMonitor?.stopMonitoring()
                 
@@ -517,15 +557,21 @@ class MainActivity : AppCompatActivity() {
                 // Update UI
                 updateUI()
                 
-                // Show completion message
+                // Show completion message and results dialog
                 val queryCount = dataLogger?.getResultsCount() ?: 0
                 val batteryCount = dataLogger?.getBatteryMetricsCount() ?: 0
                 
                 Toast.makeText(
                     this@MainActivity,
                     "Benchmark completed. Queries: $queryCount, Battery metrics: $batteryCount",
-                    Toast.LENGTH_LONG
+                    Toast.LENGTH_SHORT
                 ).show()
+                
+                // Automatically show results dialog when stopping
+                if (queryCount > 0 || batteryCount > 0) {
+                    delay(500) // Small delay so toast is visible first
+                    showResultsDialog()
+                }
                 
             } catch (e: Exception) {
                 Log.e(TAG, "Error stopping benchmark", e)
@@ -579,6 +625,87 @@ class MainActivity : AppCompatActivity() {
     
     
     /**
+     * Shows a dialog with current benchmark results and statistics.
+     */
+    private fun showResultsDialog() {
+        lifecycleScope.launch {
+            try {
+                val queryResults = dataLogger?.getQueryResults() ?: emptyList()
+                val batteryMetrics = dataLogger?.getBatteryMetrics() ?: emptyList()
+                val queryCount = queryResults.size
+                val batteryCount = batteryMetrics.size
+                
+                if (queryCount == 0 && batteryCount == 0) {
+                    Toast.makeText(this@MainActivity, "No results yet. Start the benchmark first.", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                
+                // Calculate statistics
+                val avgInferenceTime = if (queryResults.isNotEmpty()) {
+                    queryResults.map { it.inferenceTimeMs }.average().toLong()
+                } else 0L
+                
+                val minInferenceTime = if (queryResults.isNotEmpty()) {
+                    queryResults.minOf { it.inferenceTimeMs }
+                } else 0L
+                
+                val maxInferenceTime = if (queryResults.isNotEmpty()) {
+                    queryResults.maxOf { it.inferenceTimeMs }
+                } else 0L
+                
+                val avgBatteryDrain = if (batteryMetrics.isNotEmpty()) {
+                    batteryMetrics.map { it.batteryDrainRate }.average()
+                } else 0.0
+                
+                // Build message
+                val message = buildString {
+                    append("📊 Benchmark Results\n\n")
+                    append("Queries Completed: $queryCount\n")
+                    append("Battery Metrics: $batteryCount\n\n")
+                    
+                    if (queryCount > 0) {
+                        append("⚡ Inference Performance:\n")
+                        append("  Avg Time: ${avgInferenceTime}ms\n")
+                        append("  Min Time: ${minInferenceTime}ms\n")
+                        append("  Max Time: ${maxInferenceTime}ms\n\n")
+                    }
+                    
+                    if (batteryCount > 0) {
+                        append("🔋 Battery Stats:\n")
+                        append("  Avg Drain Rate: ${String.format("%.2f", avgBatteryDrain)}%/h\n\n")
+                    }
+                    
+                    if (queryResults.isNotEmpty()) {
+                        append("📝 Recent Queries:\n")
+                        queryResults.takeLast(5).forEachIndexed { index, result ->
+                            val queryPreview = result.queryText.take(40)
+                            append("  ${index + 1}. $queryPreview... (${result.inferenceTimeMs}ms)\n")
+                        }
+                        if (queryCount > 5) {
+                            append("  ... and ${queryCount - 5} more\n")
+                        }
+                    }
+                    
+                    append("\n💡 Tip: Use 'Export' to save full results to CSV")
+                }
+                
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Benchmark Results")
+                    .setMessage(message)
+                    .setPositiveButton("OK", null)
+                    .setNeutralButton("Export CSV") { _, _ ->
+                        exportResults()
+                    }
+                    .show()
+                    
+            } catch (e: Exception) {
+                Log.e(TAG, "Error showing results dialog", e)
+                Toast.makeText(this@MainActivity, "Error loading results: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+    
+    /**
      * Exports results to CSV and shows success dialog.
      */
     private fun exportResults() {
@@ -586,11 +713,23 @@ class MainActivity : AppCompatActivity() {
             try {
                 btnExport.isEnabled = false
                 
+                val queryCount = dataLogger?.getResultsCount() ?: 0
+                val batteryCount = dataLogger?.getBatteryMetricsCount() ?: 0
+                
+                if (queryCount == 0 && batteryCount == 0) {
+                    Toast.makeText(this@MainActivity, "No results to export yet", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                
                 // Export to CSV
                 val exportedFile = dataLogger?.exportToCSV()
                 
                 if (exportedFile != null) {
-                    showExportSuccessDialog(exportedFile.absolutePath)
+                    val message = "Exported successfully!\n\n" +
+                            "Queries: $queryCount\n" +
+                            "Battery Metrics: $batteryCount\n\n" +
+                            "Location:\n${exportedFile.absolutePath}"
+                    showExportSuccessDialog(message, exportedFile.absolutePath)
                 } else {
                     Toast.makeText(this@MainActivity, "Failed to export results", Toast.LENGTH_LONG).show()
                 }
@@ -689,13 +828,51 @@ class MainActivity : AppCompatActivity() {
     }
     
     /**
+     * Schedules a one-time work to stop the benchmark and export results after duration expires.
+     */
+    private fun scheduleDurationExpiredWorker(durationHours: Double) {
+        try {
+            val workManager = WorkManager.getInstance(this)
+            
+            // Cancel any existing duration work
+            workManager.cancelUniqueWork(WORK_NAME_DURATION_EXPIRED)
+            
+            // Create input data
+            val inputData = Data.Builder()
+                .putDouble(KEY_DURATION_HOURS, durationHours)
+                .build()
+            
+            // Schedule one-time work after duration
+            val durationWorkRequest = OneTimeWorkRequestBuilder<DurationExpiredWorker>()
+                .setInputData(inputData)
+                .setInitialDelay(durationHours.toLong(), TimeUnit.HOURS)
+                .addTag("duration_expired")
+                .build()
+            
+            workManager.enqueueUniqueWork(
+                WORK_NAME_DURATION_EXPIRED,
+                ExistingWorkPolicy.REPLACE,
+                durationWorkRequest
+            )
+            
+            Log.i(TAG, "Scheduled duration expired worker for ${durationHours} hours")
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Error scheduling duration expired worker", e)
+        }
+    }
+    
+    /**
      * Shows success dialog after export with file location.
      */
-    private fun showExportSuccessDialog(filePath: String) {
+    private fun showExportSuccessDialog(message: String, filePath: String) {
         AlertDialog.Builder(this)
             .setTitle("Export Successful")
-            .setMessage("Results exported to:\n$filePath")
+            .setMessage(message)
             .setPositiveButton("OK", null)
+            .setNeutralButton("View Results") { _, _ ->
+                showResultsDialog()
+            }
             .show()
     }
     

@@ -34,6 +34,17 @@
             android:layout_marginTop="8dp"
             android:minHeight="48dp" />
 
+        <!-- Instructions -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Note: Copy model files to /sdcard/Download/ directory first"
+            android:textSize="12sp"
+            android:textColor="#666666"
+            android:layout_marginTop="4dp"
+            android:padding="8dp"
+            android:background="#f0f0f0" />
+
         <!-- Interval Selection -->
         <TextView
             android:layout_width="match_parent"
@@ -48,6 +59,24 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:minHeight="48dp" />
+
+        <!-- Duration Selection -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Benchmark Duration (hours):"
+            android:textSize="16sp"
+            android:layout_marginTop="16dp" />
+
+        <EditText
+            android:id="@+id/etDuration"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:minHeight="48dp"
+            android:hint="Enter duration in hours (e.g., 2.5)"
+            android:inputType="numberDecimal"
+            android:text="1" />
 
         <!-- Status Display -->
         <TextView

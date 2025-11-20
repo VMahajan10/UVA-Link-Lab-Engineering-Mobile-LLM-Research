@@ -2,17 +2,22 @@ package com.research.llmbattery
 
 import android.content.Context
 import android.util.Log
+import android.provider.MediaStore
+import android.content.ContentUris
+import android.os.Build
+import android.os.Environment
 import java.io.File
+import java.io.FileOutputStream
 import kotlinx.coroutines.delay
 
 /**
- * LLMService class that uses MLC-LLM for Android LLM inference.
+ * LLMService class that uses llama.cpp native library for Android LLM inference.
  * Handles model loading, inference execution, and memory management for
  * battery benchmarking applications.
  * 
  * Features:
- * - MLC-LLM model loading from assets/models/ directory
- * - Pre-built Android library integration
+ * - llama.cpp native library integration via JNI
+ * - Model loading from external storage
  * - Async inference execution with coroutines
  * - Memory usage tracking and inference time measurement
  * - Thread-safe operations with proper state management
@@ -20,13 +25,59 @@ import kotlinx.coroutines.delay
  */
 class LLMService(private val context: Context) {
     
-    private var engine: MockMLCEngine? = null
+    companion object {
+        private const val TAG = "LLMService"
+        
+        init {
+            try {
+                // Load GGML dependencies first (required by libllama.so)
+                try {
+                    System.loadLibrary("ggml")
+                    Log.i(TAG, "Native library ggml loaded successfully")
+                } catch (e: UnsatisfiedLinkError) {
+                    Log.w(TAG, "ggml library not found (may be statically linked): ${e.message}")
+                }
+                
+                try {
+                    System.loadLibrary("ggml-base")
+                    Log.i(TAG, "Native library ggml-base loaded successfully")
+                } catch (e: UnsatisfiedLinkError) {
+                    Log.w(TAG, "ggml-base library not found (may be statically linked): ${e.message}")
+                }
+                
+                try {
+                    System.loadLibrary("ggml-cpu")
+                    Log.i(TAG, "Native library ggml-cpu loaded successfully")
+                } catch (e: UnsatisfiedLinkError) {
+                    Log.w(TAG, "ggml-cpu library not found (may be statically linked): ${e.message}")
+                }
+                
+                // Load llama.so (main library)
+                System.loadLibrary("llama")
+                Log.i(TAG, "Native library llama loaded successfully")
+                
+                // Then load our JNI wrapper
+                System.loadLibrary("llama-jni")
+                Log.i(TAG, "Native library llama-jni loaded successfully")
+            } catch (e: UnsatisfiedLinkError) {
+                Log.e(TAG, "Failed to load native library: ${e.message}", e)
+            }
+        }
+    }
+    
+    // Native method declarations
+    private external fun nativeInit(modelPath: String, nThreads: Int, nCtx: Int): Long
+    private external fun nativeGenerate(contextPtr: Long, prompt: String, maxTokens: Int): String
+    private external fun nativeFree(contextPtr: Long)
+    
+    private var nativeContextPtr: Long = 0
     private var modelPath: String? = null
     var isModelLoaded: Boolean = false
         private set
     var quantizationType: String = ""
         private set
     private var lastInferenceTimeMs: Long = 0
+    private var useNative: Boolean = true
     
     /**
      * Loads a model from external storage using MLC-LLM.
@@ -38,26 +89,117 @@ class LLMService(private val context: Context) {
         return try {
             Log.i(TAG, "Loading model: $modelFileName")
             
-            // Look for model in external storage first
-            val externalModelFile = File("/sdcard/Download", modelFileName)
+            // Copy file to app's private directory for native access
+            // Use MediaStore API to access Download folder on Android 10+
+            val appFilesDir = context.getExternalFilesDir(null) ?: context.filesDir
+            val privateModelFile = File(appFilesDir, modelFileName)
             
-            if (!externalModelFile.exists()) {
-                Log.e(TAG, "Model not found in /sdcard/Download/: $modelFileName")
-                Log.e(TAG, "Please copy the model file to /sdcard/Download/ directory")
-                return false
+            // Check if we already have the file
+            if (privateModelFile.exists()) {
+                Log.i(TAG, "Model already exists in private directory: ${privateModelFile.absolutePath}")
+                modelPath = privateModelFile.absolutePath
+                Log.i(TAG, "Using existing model path: $modelPath")
+            } else {
+                // Try multiple methods to access the file
+                var fileUri: android.net.Uri? = null
+                
+                // Method 1: Try MediaStore API
+                Log.i(TAG, "Looking for model in Download folder via MediaStore...")
+                fileUri = findFileInDownloads(modelFileName)
+                
+                // Method 2: Try direct file access with Environment API
+                if (fileUri == null) {
+                    Log.i(TAG, "MediaStore not found, trying direct file access...")
+                    try {
+                        val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                        val file = File(downloadDir, modelFileName)
+                        if (file.exists() && file.canRead()) {
+                            fileUri = android.net.Uri.fromFile(file)
+                            Log.i(TAG, "Found file via direct access: ${file.absolutePath}")
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Direct file access failed: ${e.message}")
+                    }
+                }
+                
+                // Method 3: Try /sdcard/Download path directly
+                if (fileUri == null) {
+                    Log.i(TAG, "Trying /sdcard/Download path...")
+                    try {
+                        val file = File("/sdcard/Download", modelFileName)
+                        if (file.exists()) {
+                            // Try to read it
+                            file.inputStream().use { it.read() }
+                            fileUri = android.net.Uri.fromFile(file)
+                            Log.i(TAG, "Found file via /sdcard/Download: ${file.absolutePath}")
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "/sdcard/Download access failed: ${e.message}")
+                    }
+                }
+                
+                if (fileUri == null) {
+                    Log.e(TAG, "Model not found in Download folder: $modelFileName")
+                    Log.e(TAG, "Please ensure the file exists in /sdcard/Download/")
+                    return false
+                }
+                
+                // Copy from URI to private directory
+                Log.i(TAG, "Copying model to private directory: ${privateModelFile.absolutePath}")
+                try {
+                    val inputStream = if (fileUri.scheme == "file") {
+                        File(fileUri.path ?: "").inputStream()
+                    } else {
+                        context.contentResolver.openInputStream(fileUri)
+                    }
+                    
+                    inputStream?.use { input ->
+                        FileOutputStream(privateModelFile).use { output ->
+                            input.copyTo(output)
+                        }
+                    } ?: throw Exception("Could not open input stream from URI")
+                    
+                    Log.i(TAG, "Model copied successfully (${privateModelFile.length()} bytes)")
+                    modelPath = privateModelFile.absolutePath
+                    Log.i(TAG, "Using model path: $modelPath")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to copy model file: ${e.message}", e)
+                    return false
+                }
             }
             
-            // Mock MLC engine initialization
-            engine = MockMLCEngine(externalModelFile.absolutePath)
+            // Try to load using native library
+            if (useNative) {
+                try {
+                    val nThreads = 4 // Use 4 threads for mobile
+                    val nCtx = 2048   // Context window size
+                    nativeContextPtr = nativeInit(modelPath ?: "", nThreads, nCtx)
+                    
+                    if (nativeContextPtr == 0L) {
+                        Log.w(TAG, "Native initialization failed, falling back to mock")
+                        useNative = false
+                    } else {
+                        Log.i(TAG, "Native model loaded successfully, contextPtr: $nativeContextPtr")
+                        isModelLoaded = true
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Native library error: ${e.message}", e)
+                    useNative = false
+                }
+            }
             
-            modelPath = externalModelFile.absolutePath
-            isModelLoaded = true
+            // Fallback to mock if native failed
+            if (!useNative || !isModelLoaded) {
+                Log.w(TAG, "Using mock engine as fallback")
+                // Keep mock fallback for now, but we should remove it once native works
+                isModelLoaded = true // Set to true for mock mode
+            }
             
             // Detect quantization type from model name
             quantizationType = detectQuantizationType(modelFileName)
             
-            Log.i(TAG, "Model loaded successfully")
-            Log.i(TAG, "Model path: ${externalModelFile.absolutePath}")
+            Log.i(TAG, "Model loaded successfully (native: $useNative)")
+            Log.i(TAG, "Model path: $modelPath")
             Log.i(TAG, "Quantization: $quantizationType")
             true
         } catch (e: Exception) {
@@ -74,17 +216,24 @@ class LLMService(private val context: Context) {
      * @return Generated response string, or error message if failed
      */
     suspend fun generateResponse(prompt: String): String {
-        if (!isModelLoaded || engine == null) {
+        if (!isModelLoaded) {
             return "Error: Model not loaded"
         }
         
         return try {
             val startTime = System.currentTimeMillis()
             
-            // Simulate inference delay
-            delay(1000) // 1 second delay to simulate real inference
-            
-            val response = engine!!.chat(prompt, maxTokens = 512)
+            val response = if (useNative && nativeContextPtr != 0L) {
+                // Use native library
+                Log.d(TAG, "Using native library for inference")
+                nativeGenerate(nativeContextPtr, prompt, maxTokens = 512)
+            } else {
+                // Fallback to mock
+                Log.w(TAG, "Using mock response (native not available)")
+                delay(1000) // Simulate inference delay
+                "Mock Response: This is a simulated response for the prompt: '$prompt'. " +
+                        "Model loaded from: $modelPath. Native library not available."
+            }
             
             lastInferenceTimeMs = System.currentTimeMillis() - startTime
             Log.i(TAG, "Inference completed in ${lastInferenceTimeMs}ms")
@@ -100,8 +249,15 @@ class LLMService(private val context: Context) {
      * Unloads the current model and frees resources.
      */
     fun unloadModel() {
-        engine?.close()
-        engine = null
+        if (useNative && nativeContextPtr != 0L) {
+            try {
+                nativeFree(nativeContextPtr)
+                Log.i(TAG, "Native context freed")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error freeing native context: ${e.message}", e)
+            }
+            nativeContextPtr = 0L
+        }
         isModelLoaded = false
         modelPath = null
         Log.i(TAG, "Model unloaded")
@@ -195,29 +351,55 @@ class LLMService(private val context: Context) {
      */
     fun isModelAvailable(modelFileName: String): Boolean {
         return try {
-            val externalModelFile = File("/sdcard/Download", modelFileName)
-            externalModelFile.exists()
+            findFileInDownloads(modelFileName) != null
         } catch (e: Exception) {
             false
         }
     }
     
-    companion object {
-        private const val TAG = "LLMService"
-    }
-}
-
-/**
- * Mock MLC-LLM engine implementation for testing purposes.
- * This simulates the MLC-LLM API without requiring the actual library.
- */
-class MockMLCEngine(private val modelPath: String) {
-    fun chat(prompt: String, maxTokens: Int): String {
-        return "Mock MLC-LLM Response: This is a simulated response for the prompt: '$prompt'. " +
-                "Model loaded from: $modelPath. This is running in mock mode for testing purposes."
-    }
-    
-    fun close() {
-        // Mock cleanup
+    /**
+     * Finds a file in the Download folder using MediaStore API (Android 10+ compatible).
+     * 
+     * @param fileName Name of the file to find
+     * @return Content URI of the file, or null if not found
+     */
+    private fun findFileInDownloads(fileName: String): android.net.Uri? {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // Use MediaStore.Downloads for Android 10+
+                val projection = arrayOf(MediaStore.Downloads._ID, MediaStore.Downloads.DISPLAY_NAME)
+                val selection = "${MediaStore.Downloads.DISPLAY_NAME} = ?"
+                val selectionArgs = arrayOf(fileName)
+                
+                val cursor = context.contentResolver.query(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    projection,
+                    selection,
+                    selectionArgs,
+                    null
+                )
+                
+                cursor?.use {
+                    if (it.moveToFirst()) {
+                        val idColumn = it.getColumnIndexOrThrow(MediaStore.Downloads._ID)
+                        val id = it.getLong(idColumn)
+                        ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id)
+                    } else {
+                        null
+                    }
+                }
+            } else {
+                // For Android 9 and below, try direct file access
+                val file = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), fileName)
+                if (file.exists()) {
+                    android.net.Uri.fromFile(file)
+                } else {
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error finding file in Downloads: ${e.message}", e)
+            null
+        }
     }
 }

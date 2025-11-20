@@ -29,6 +29,12 @@ android {
         }
     }
     
+    packagingOptions {
+        resources {
+            excludes += ['META-INF/NOTICE.md', 'META-INF/LICENSE.md']
+        }
+    }
+    
     // Using MLC-LLM pre-built library instead of native llama.cpp build
 
     buildFeatures {

@@ -40,29 +40,30 @@ class QueryScheduler(
         // Input data keys
         private const val KEY_QUERY_INTERVAL = "query_interval"
         private const val KEY_QUERY_INDEX = "query_index"
+        private const val KEY_MODEL_PATH = "model_path"
         
-        // Predefined test queries for comprehensive LLM testing
+        // Predefined test queries for comprehensive LLM testing (using Qwen's chat template format)
         private val TEST_QUERIES = listOf(
-            "What is machine learning and how does it work?",
-            "Explain quantum computing in simple terms",
-            "Write a haiku about artificial intelligence",
+            "What is machine learning?",
+            "Explain quantum computing in simple terms.",
+            "Write a haiku about artificial intelligence.",
             "What are the benefits of renewable energy?",
-            "Describe the process of photosynthesis",
-            "What is the difference between AI and machine learning?",
-            "Explain the concept of blockchain technology",
-            "Write a short story about a robot learning to paint",
-            "What are the ethical implications of artificial intelligence?",
-            "Describe the water cycle in detail",
-            "What is the theory of relativity?",
-            "Explain how neural networks work",
-            "Write a poem about the future of technology",
-            "What are the main causes of climate change?",
-            "Describe the structure of DNA",
-            "What is the difference between supervised and unsupervised learning?",
-            "Explain the concept of sustainable development",
-            "Write a dialogue between a human and an AI assistant",
-            "What are the potential risks of artificial general intelligence?",
-            "Describe the process of cellular respiration"
+            "How does photosynthesis work?",
+            "What is the capital of France?",
+            "Explain the theory of relativity.",
+            "What causes the seasons?",
+            "How do computers process information?",
+            "What is DNA?",
+            "Describe the water cycle.",
+            "What is climate change?",
+            "How does the internet work?",
+            "What is democracy?",
+            "Explain gravity in simple terms.",
+            "What are the primary colors?",
+            "How do vaccines work?",
+            "What is biodiversity?",
+            "Explain how batteries store energy.",
+            "What is the scientific method?"
         )
         
         // Work constraints
@@ -89,7 +90,8 @@ class QueryScheduler(
             intervalMinutes: Int,
             llmService: LLMService,
             dataLogger: DataLogger,
-            batteryMonitor: BatteryMonitor
+            batteryMonitor: BatteryMonitor,
+            modelPath: String
         ) {
             val workManager = WorkManager.getInstance(context)
             
@@ -102,7 +104,11 @@ class QueryScheduler(
             val inputData = Data.Builder()
                 .putLong(KEY_QUERY_INTERVAL, intervalMinutes * 60 * 1000L) // Convert to milliseconds
                 .putInt(KEY_QUERY_INDEX, 0)
+                .putString(KEY_MODEL_PATH, modelPath)
                 .build()
+            
+            // Store service references in Application or use a different approach
+            // For now, we'll create services in doWork() using the model path
             
             val periodicWorkRequest = PeriodicWorkRequestBuilder<QueryScheduler>(
                 interval, TimeUnit.MINUTES
@@ -183,11 +189,24 @@ class QueryScheduler(
             // Extract input data
             queryInterval = inputData.getLong(KEY_QUERY_INTERVAL, 60000L) // Default 1 minute
             currentQueryIndex = inputData.getInt(KEY_QUERY_INDEX, 0)
+            val modelPath = inputData.getString(KEY_MODEL_PATH) ?: ""
             
-            // Check if LLM service is available
+            // Initialize services if not already initialized
             if (!::llmService.isInitialized) {
-                Log.e(TAG, "LLMService not initialized")
-                return@withContext Result.failure()
+                llmService = LLMService(applicationContext)
+                if (modelPath.isNotEmpty()) {
+                    val loaded = llmService.loadModel(modelPath)
+                    if (!loaded) {
+                        Log.e(TAG, "Failed to load model: $modelPath")
+                        return@withContext Result.failure()
+                    }
+                }
+            }
+            if (!::dataLogger.isInitialized) {
+                dataLogger = DataLogger(applicationContext)
+            }
+            if (!::batteryMonitor.isInitialized) {
+                batteryMonitor = BatteryMonitor(applicationContext)
             }
             
             // Check battery level before executing query
@@ -261,13 +280,29 @@ class QueryScheduler(
     /**
      * Gets the next query from the test queries list.
      * Cycles through the list, starting from the beginning when reaching the end.
+     * Formats the query using Qwen's chat template.
      * 
-     * @return Next query string
+     * @return Next query string formatted with Qwen chat template
      */
     fun getNextQuery(): String {
         val query = testQueries[currentQueryIndex]
         currentQueryIndex = (currentQueryIndex + 1) % testQueries.size
-        return query
+        return formatQwenPrompt(query)
+    }
+    
+    /**
+     * Formats a query using Qwen's chat template.
+     * 
+     * @param query The user query to format
+     * @return Formatted prompt string with Qwen chat template
+     */
+    private fun formatQwenPrompt(query: String): String {
+        return """<|im_start|>system
+You are a helpful assistant.<|im_end|>
+<|im_start|>user
+$query<|im_end|>
+<|im_start|>assistant
+"""
     }
     
     /**
@@ -358,12 +393,14 @@ class QueryScheduler(
                 val startTime = System.currentTimeMillis()
                 val batteryLevel = batteryMonitor.getCurrentBatteryLevel()
                 
-                val responseText = llmService.generateResponse(query)
+                // Format query with Qwen chat template
+                val formattedQuery = formatQwenPrompt(query)
+                val responseText = llmService.generateResponse(formattedQuery)
                 val endTime = System.currentTimeMillis()
                 val inferenceTimeMs = endTime - startTime
                 
                 QueryResult.createNow(
-                    queryText = query,
+                    queryText = query, // Store original query, not formatted
                     responseText = responseText,
                     inferenceTimeMs = inferenceTimeMs,
                     batteryLevel = batteryLevel,

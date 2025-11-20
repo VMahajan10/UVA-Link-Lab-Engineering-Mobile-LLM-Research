@@ -2,6 +2,8 @@
 #include <android/log.h>
 #include <string>
 #include <vector>
+#include <cstdio>
+#include <cerrno>
 #include "llama.cpp/include/llama.h"
 
 #define TAG "LLamaJNI"
@@ -84,15 +86,28 @@ Java_com_research_llmbattery_LLMService_nativeInit(
     std::string modelPath = jstring2string(env, jModelPath);
     LOGD("Initializing model: %s", modelPath.c_str());
     
+    // Check if file exists
+    FILE* testFile = fopen(modelPath.c_str(), "rb");
+    if (!testFile) {
+        LOGE("Cannot open model file: %s (errno: %d)", modelPath.c_str(), errno);
+        return 0;
+    }
+    fclose(testFile);
+    LOGD("Model file exists and is readable");
+    
     // Initialize llama backend
+    LOGD("Initializing llama backend...");
     llama_backend_init();
+    LOGD("Backend initialized");
     
     // Load model (updated API)
+    LOGD("Loading model with default params...");
     llama_model_params model_params = llama_model_default_params();
+    LOGD("Calling llama_model_load_from_file...");
     llama_model* model = llama_model_load_from_file(modelPath.c_str(), model_params);
     
     if (!model) {
-        LOGE("Failed to load model from %s", modelPath.c_str());
+        LOGE("Failed to load model from %s - llama_model_load_from_file returned NULL", modelPath.c_str());
         return 0;
     }
     
