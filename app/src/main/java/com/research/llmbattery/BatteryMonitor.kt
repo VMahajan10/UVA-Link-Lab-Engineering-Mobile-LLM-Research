@@ -171,6 +171,9 @@ class BatteryMonitor(
      * Based on the difference between start and current battery levels
      * and the elapsed time since monitoring started.
      * 
+     * Note: This is a PROJECTED rate (extrapolated to per hour).
+     * Over short time periods, small battery changes can create high projected rates.
+     * 
      * @return Battery drain rate in percentage per hour, or 0.0 if calculation fails
      */
     fun getBatteryDrainRate(): Float {
@@ -180,7 +183,14 @@ class BatteryMonitor(
             }
             
             val currentTime = System.currentTimeMillis()
-            val elapsedTimeHours = (currentTime - startTime) / (1000.0 * 60 * 60) // Convert to hours
+            val elapsedTimeMs = currentTime - startTime
+            val elapsedTimeHours = elapsedTimeMs / (1000.0 * 60 * 60) // Convert to hours
+            
+            // Require at least 30 seconds of monitoring for accurate rate calculation
+            // This prevents misleading high rates from short-term fluctuations
+            if (elapsedTimeMs < 30000) { // Less than 30 seconds
+                return 0.0f
+            }
             
             if (elapsedTimeHours <= 0) {
                 0.0f
@@ -189,7 +199,15 @@ class BatteryMonitor(
             val batteryDrained = startBatteryLevel - currentBatteryLevel
             val drainRate = (batteryDrained / elapsedTimeHours).toFloat()
             
-            max(0.0f, drainRate) // Ensure non-negative drain rate
+            // Cap at reasonable maximum (1000%/hour) to avoid extreme values from measurement errors
+            val cappedRate = minOf(max(0.0f, drainRate), 1000.0f)
+            
+            android.util.Log.d("BatteryMonitor", 
+                "Drain rate calculation: ${startBatteryLevel}% -> $currentBatteryLevel% " +
+                "($batteryDrained% change) over ${elapsedTimeMs / 1000.0}s = " +
+                "${String.format("%.2f", cappedRate)}%/hour (projected)")
+            
+            cappedRate
         } catch (e: Exception) {
             e.printStackTrace()
             0.0f
@@ -306,6 +324,16 @@ class BatteryMonitor(
         val cpuUsage = getCPUUsage()
         val memoryUsage = getMemoryUsage()
         val temperature = getTemperature()
+        
+        // Log detailed battery drain info for debugging
+        if (startTime > 0 && startBatteryLevel > 0) {
+            val elapsedHours = (currentTime - startTime) / (1000.0 * 60 * 60)
+            val actualDrain = startBatteryLevel - batteryLevel
+            android.util.Log.d("BatteryMonitor", 
+                "Battery: $batteryLevel% (started at $startBatteryLevel%, actual change: $actualDrain%) | " +
+                "Time elapsed: ${String.format("%.2f", elapsedHours * 60)} min | " +
+                "Projected rate: ${String.format("%.2f", batteryDrainRate)}%/hour")
+        }
         
         val batteryMetrics = BatteryMetrics.create(
             timestamp = currentTime,

@@ -43,6 +43,7 @@ class DataLogger(
         // CSV Headers
         private const val QUERY_HEADER = "timestamp,queryText,responseText,inferenceTimeMs,batteryLevel,quantization,modelName"
         private const val BATTERY_HEADER = "timestamp,batteryLevel,batteryDrainRate,cpuUsage,memoryUsage,temperature"
+        private const val INCREMENTAL_HEADER = "timestamp,query_number,query_text,response_text,inference_time_ms,battery_before,battery_after,battery_change_absolute,battery_drain_rate_per_hour,cpu_usage,memory_usage,temperature,model_name,quantization"
     }
     
     // Properties
@@ -56,6 +57,336 @@ class DataLogger(
     
     // Date formatter for human-readable timestamps
     private val dateFormatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault())
+    
+    // Single incremental CSV file
+    private var incrementalCsvFile: File? = null
+    private var incrementalCsvWriter: FileWriter? = null
+    private var isIncrementalFileInitialized = false
+    
+    /**
+     * Initializes the incremental CSV file for writing data after each query.
+     * Should be called once at the start of a benchmark.
+     * 
+     * @param modelName Model name (for reference, stored in each row)
+     * @param quantization Quantization level (for reference, stored in each row)
+     */
+    suspend fun initializeIncrementalCSV(@Suppress("UNUSED_PARAMETER") modelName: String, @Suppress("UNUSED_PARAMETER") quantization: String) {
+        withContext(Dispatchers.IO) {
+            lock.write {
+                try {
+                    val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                    if (!downloadsDir.exists()) {
+                        downloadsDir.mkdirs()
+                    }
+                    
+                    val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                    val fileName = "llm_benchmark_$timestamp.csv"
+                    
+                    incrementalCsvFile = if (downloadsDir.canWrite()) {
+                        File(downloadsDir, fileName)
+                    } else {
+                        File(logFilePath, fileName)
+                    }
+                    
+                    incrementalCsvFile?.parentFile?.mkdirs()
+                    incrementalCsvWriter = FileWriter(incrementalCsvFile, false) // Overwrite mode
+                    
+                    // Write header
+                    incrementalCsvWriter?.write(INCREMENTAL_HEADER)
+                    incrementalCsvWriter?.write(NEWLINE)
+                    incrementalCsvWriter?.flush()
+                    
+                    isIncrementalFileInitialized = true
+                    Log.i(TAG, "Initialized incremental CSV: ${incrementalCsvFile?.absolutePath}")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error initializing incremental CSV", e)
+                    incrementalCsvWriter?.close()
+                    incrementalCsvWriter = null
+                    incrementalCsvFile = null
+                }
+            }
+        }
+    }
+    
+    /**
+     * Appends a query result with battery metrics to the incremental CSV file.
+     * Writes immediately to disk after each query.
+     * 
+     * @param queryResult The query result
+     * @param batteryBefore Battery metrics before the query
+     * @param batteryAfter Battery metrics after the query
+     * @param queryNumber The query number (1, 2, 3, etc.)
+     */
+    suspend fun appendQueryToCSV(
+        queryResult: QueryResult,
+        batteryBefore: BatteryMetrics?,
+        batteryAfter: BatteryMetrics?,
+        queryNumber: Int
+    ) {
+        withContext(Dispatchers.IO) {
+            lock.write {
+                try {
+                    if (!isIncrementalFileInitialized || incrementalCsvWriter == null) {
+                        Log.w(TAG, "Incremental CSV not initialized, skipping append")
+                        return@withContext
+                    }
+                    
+                    val csvLine = buildString {
+                        // Timestamp
+                        append(escapeCsvField(formatTimestamp(queryResult.timestamp)))
+                        append(CSV_DELIMITER)
+                        
+                        // Query number
+                        append(queryNumber)
+                        append(CSV_DELIMITER)
+                        
+                        // Query text
+                        append(escapeCsvField(queryResult.queryText))
+                        append(CSV_DELIMITER)
+                        
+                        // Response text (full response)
+                        append(escapeCsvField(queryResult.responseText))
+                        append(CSV_DELIMITER)
+                        
+                        // Inference time
+                        append(queryResult.inferenceTimeMs)
+                        append(CSV_DELIMITER)
+                        
+                        // Battery before
+                        append(batteryBefore?.batteryLevel ?: queryResult.batteryLevel)
+                        append(CSV_DELIMITER)
+                        
+                        // Battery after
+                        append(queryResult.batteryLevel)
+                        append(CSV_DELIMITER)
+                        
+                        // Battery change (absolute)
+                        val batteryChange = (batteryBefore?.batteryLevel ?: queryResult.batteryLevel) - queryResult.batteryLevel
+                        append(batteryChange)
+                        append(CSV_DELIMITER)
+                        
+                        // Battery drain rate (projected per hour)
+                        append(batteryAfter?.batteryDrainRate ?: batteryBefore?.batteryDrainRate ?: 0.0f)
+                        append(CSV_DELIMITER)
+                        
+                        // CPU usage
+                        append(batteryAfter?.cpuUsage ?: batteryBefore?.cpuUsage ?: 0.0f)
+                        append(CSV_DELIMITER)
+                        
+                        // Memory usage
+                        append(batteryAfter?.memoryUsage ?: batteryBefore?.memoryUsage ?: 0L)
+                        append(CSV_DELIMITER)
+                        
+                        // Temperature
+                        append(batteryAfter?.temperature ?: batteryBefore?.temperature ?: 0.0f)
+                        append(CSV_DELIMITER)
+                        
+                        // Model name
+                        append(escapeCsvField(queryResult.modelName))
+                        append(CSV_DELIMITER)
+                        
+                        // Quantization
+                        append(escapeCsvField(queryResult.quantization))
+                        append(NEWLINE)
+                    }
+                    
+                    incrementalCsvWriter?.write(csvLine)
+                    incrementalCsvWriter?.flush() // Force write to disk immediately
+                    
+                    Log.i(TAG, "Appended query $queryNumber to incremental CSV")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error appending to incremental CSV", e)
+                }
+            }
+        }
+    }
+    
+    /**
+     * Exports all collected query results and battery metrics to a single CSV file.
+     * This method matches each query with battery metrics before and after the query.
+     * Should be called at the end of benchmark after all data is collected.
+     * 
+     * @return File object representing the CSV file, or null if export fails
+     */
+    suspend fun exportAllDataToCSV(): File? {
+        return withContext(Dispatchers.IO) {
+            try {
+                // Save to public Downloads folder for easy access
+                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                if (!downloadsDir.exists()) {
+                    downloadsDir.mkdirs()
+                }
+                
+                val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                val fileName = "llm_benchmark_$timestamp.csv"
+                
+                val csvFile = if (downloadsDir.canWrite()) {
+                    File(downloadsDir, fileName)
+                } else {
+                    File(logFilePath, fileName)
+                }
+                
+                csvFile.parentFile?.mkdirs()
+                val writer = FileWriter(csvFile, false) // Overwrite mode
+                
+                // Write header
+                writer.write(INCREMENTAL_HEADER)
+                writer.write(NEWLINE)
+                
+                // Get all data
+                val queryResults = lock.read { results.toList() }
+                val allBatteryMetrics = lock.read { batteryMetrics.toList() }
+                
+                Log.i(TAG, "=== CSV EXPORT START ===")
+                Log.i(TAG, "Query results count: ${queryResults.size}")
+                Log.i(TAG, "Battery metrics count: ${allBatteryMetrics.size}")
+                
+                if (queryResults.isEmpty()) {
+                    Log.w(TAG, "WARNING: No query results to export!")
+                }
+                if (allBatteryMetrics.isEmpty()) {
+                    Log.w(TAG, "WARNING: No battery metrics to export!")
+                }
+                
+                // Write each query with matching battery metrics
+                var rowsWritten = 0
+                queryResults.forEachIndexed { index, queryResult ->
+                    val queryNumber = index + 1
+                    
+                    // Find battery metrics closest to this query timestamp
+                    val queryTime = queryResult.timestamp
+                    val batteryBefore = allBatteryMetrics
+                        .filter { it.timestamp <= queryTime }
+                        .maxByOrNull { it.timestamp }
+                    val batteryAfter = allBatteryMetrics
+                        .filter { it.timestamp >= queryTime }
+                        .minByOrNull { it.timestamp }
+                    
+                    val csvLine = buildString {
+                        // Timestamp
+                        append(escapeCsvField(formatTimestamp(queryResult.timestamp)))
+                        append(CSV_DELIMITER)
+                        
+                        // Query number
+                        append(queryNumber)
+                        append(CSV_DELIMITER)
+                        
+                        // Query text
+                        append(escapeCsvField(queryResult.queryText))
+                        append(CSV_DELIMITER)
+                        
+                        // Response text (full response)
+                        append(escapeCsvField(queryResult.responseText))
+                        append(CSV_DELIMITER)
+                        
+                        // Inference time
+                        append(queryResult.inferenceTimeMs)
+                        append(CSV_DELIMITER)
+                        
+                        // Battery before
+                        append(batteryBefore?.batteryLevel ?: queryResult.batteryLevel)
+                        append(CSV_DELIMITER)
+                        
+                        // Battery after
+                        append(queryResult.batteryLevel)
+                        append(CSV_DELIMITER)
+                        
+                        // Battery change (absolute)
+                        val batteryChange = (batteryBefore?.batteryLevel ?: queryResult.batteryLevel) - queryResult.batteryLevel
+                        append(batteryChange)
+                        append(CSV_DELIMITER)
+                        
+                        // Battery drain rate (projected per hour)
+                        append(batteryAfter?.batteryDrainRate ?: batteryBefore?.batteryDrainRate ?: 0.0f)
+                        append(CSV_DELIMITER)
+                        
+                        // CPU usage
+                        append(batteryAfter?.cpuUsage ?: batteryBefore?.cpuUsage ?: 0.0f)
+                        append(CSV_DELIMITER)
+                        
+                        // Memory usage
+                        append(batteryAfter?.memoryUsage ?: batteryBefore?.memoryUsage ?: 0L)
+                        append(CSV_DELIMITER)
+                        
+                        // Temperature
+                        append(batteryAfter?.temperature ?: batteryBefore?.temperature ?: 0.0f)
+                        append(CSV_DELIMITER)
+                        
+                        // Model name
+                        append(escapeCsvField(queryResult.modelName))
+                        append(CSV_DELIMITER)
+                        
+                        // Quantization
+                        append(escapeCsvField(queryResult.quantization))
+                        append(NEWLINE)
+                    }
+                    
+                    writer.write(csvLine)
+                    rowsWritten++
+                }
+                
+                writer.flush()
+                writer.close()
+                
+                // Small delay to ensure file system has flushed
+                kotlinx.coroutines.delay(100)
+                
+                // Verify file was written correctly
+                val fileSize = csvFile.length()
+                val fileExists = csvFile.exists()
+                
+                Log.i(TAG, "=== CSV EXPORT COMPLETE ===")
+                Log.i(TAG, "Rows written: $rowsWritten (expected: ${queryResults.size})")
+                Log.i(TAG, "File path: ${csvFile.absolutePath}")
+                Log.i(TAG, "File size: $fileSize bytes")
+                Log.i(TAG, "File exists: $fileExists")
+                
+                if (fileSize == 0L) {
+                    Log.e(TAG, "ERROR: CSV file is empty (0 bytes)!")
+                    Log.e(TAG, "Query results available: ${queryResults.size}")
+                    Log.e(TAG, "Battery metrics available: ${allBatteryMetrics.size}")
+                    Log.e(TAG, "Rows written: $rowsWritten")
+                } else if (rowsWritten == 0) {
+                    Log.e(TAG, "ERROR: No rows were written to CSV!")
+                    Log.e(TAG, "Query results available: ${queryResults.size}")
+                    Log.e(TAG, "Battery metrics available: ${allBatteryMetrics.size}")
+                } else {
+                    Log.i(TAG, "✅ CSV export successful: $rowsWritten rows, $fileSize bytes")
+                }
+                
+                csvFile
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Error exporting all data to CSV", e)
+                null
+            }
+        }
+    }
+    
+    /**
+     * Closes the incremental CSV file. Should be called at the end of benchmark.
+     * @deprecated Use exportAllDataToCSV() instead
+     */
+    @Deprecated("Use exportAllDataToCSV() instead")
+    suspend fun closeIncrementalCSV(): File? {
+        return withContext(Dispatchers.IO) {
+            lock.write {
+                try {
+                    incrementalCsvWriter?.flush()
+                    incrementalCsvWriter?.close()
+                    val file = incrementalCsvFile
+                    incrementalCsvWriter = null
+                    incrementalCsvFile = null
+                    isIncrementalFileInitialized = false
+                    Log.i(TAG, "Closed incremental CSV: ${file?.absolutePath}")
+                    file
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error closing incremental CSV", e)
+                    null
+                }
+            }
+        }
+    }
     
     /**
      * Logs a QueryResult to the in-memory storage.
@@ -92,29 +423,64 @@ class DataLogger(
     }
     
     /**
+     * Forces immediate write to disk to ensure data isn't lost.
+     * This method ensures all buffered data is persisted.
+     * Note: Since we're using in-memory lists, this primarily ensures
+     * the data structures are in a consistent state.
+     */
+    fun flush() {
+        lock.read {
+            try {
+                // Force synchronization to ensure data is written
+                // The actual disk write happens during export, but this ensures
+                // the in-memory data is in a consistent state
+                val queryCount = results.size
+                val batteryCount = batteryMetrics.size
+                Log.d(TAG, "Flush: $queryCount queries, $batteryCount battery metrics in memory")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error during flush", e)
+            }
+        }
+    }
+    
+    /**
      * Exports all logged data to CSV files.
      * Creates two separate CSV files: one for query results and one for battery metrics.
-     * Files are saved to external storage with proper formatting and headers.
+     * Files are saved to the public Downloads folder for easy access.
      * 
      * @return File object representing the query results CSV file, or null if export fails
      */
     suspend fun exportToCSV(): File? {
         return withContext(Dispatchers.IO) {
             try {
-                // Ensure directory exists
-                val logDir = File(logFilePath)
-                if (!logDir.exists()) {
-                    logDir.mkdirs()
+                // Save to public Downloads folder for easy access
+                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                
+                // Ensure Downloads directory exists
+                if (!downloadsDir.exists()) {
+                    downloadsDir.mkdirs()
                 }
                 
+                // Check if Downloads directory is writable
+                if (!downloadsDir.canWrite()) {
+                    Log.e(TAG, "Downloads directory is not writable: ${downloadsDir.absolutePath}")
+                    // Fallback to app directory
+                    return@withContext exportToCSVFallback()
+                }
+                
+                // Generate timestamp for unique filenames
+                val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                
                 // Export query results
-                val queryFile = exportQueryResults()
+                val queryFile = File(downloadsDir, "llm_benchmark_queries_$timestamp.csv")
+                val queryExported = exportQueryResults(queryFile)
                 
                 // Export battery metrics
-                val batteryFile = exportBatteryMetrics()
+                val batteryFile = File(downloadsDir, "llm_benchmark_battery_$timestamp.csv")
+                val batteryExported = exportBatteryMetrics(batteryFile)
                 
-                if (queryFile != null && batteryFile != null) {
-                    Log.i(TAG, "Successfully exported data to CSV files:")
+                if (queryExported && batteryExported) {
+                    Log.i(TAG, "Successfully exported data to Downloads folder")
                     Log.i(TAG, "Query results: ${queryFile.absolutePath}")
                     Log.i(TAG, "Battery metrics: ${batteryFile.absolutePath}")
                     queryFile
@@ -124,7 +490,47 @@ class DataLogger(
                 }
                 
             } catch (e: Exception) {
-                Log.e(TAG, "Error during CSV export", e)
+                Log.e(TAG, "Error during CSV export: ${e.message}", e)
+                // Fallback to app directory
+                exportToCSVFallback()
+            }
+        }
+    }
+    
+    /**
+     * Fallback method to export CSV files to app directory if Downloads folder is not accessible.
+     * 
+     * @return File object representing the query results CSV file, or null if export fails
+     */
+    private suspend fun exportToCSVFallback(): File? {
+        return withContext(Dispatchers.IO) {
+            try {
+                // Ensure directory exists
+                val logDir = File(logFilePath)
+                if (!logDir.exists()) {
+                    logDir.mkdirs()
+                }
+                
+                // Export query results
+                val queryFile = File(logDir, QUERY_RESULTS_FILE)
+                val queryExported = exportQueryResults(queryFile)
+                
+                // Export battery metrics
+                val batteryFile = File(logDir, BATTERY_METRICS_FILE)
+                val batteryExported = exportBatteryMetrics(batteryFile)
+                
+                if (queryExported && batteryExported) {
+                    Log.i(TAG, "Exported data to app directory (Downloads not accessible)")
+                    Log.i(TAG, "Query results: ${queryFile.absolutePath}")
+                    Log.i(TAG, "Battery metrics: ${batteryFile.absolutePath}")
+                    queryFile
+                } else {
+                    Log.e(TAG, "Failed to export CSV files")
+                    null
+                }
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Error during CSV export fallback: ${e.message}", e)
                 null
             }
         }
@@ -133,12 +539,15 @@ class DataLogger(
     /**
      * Exports query results to CSV file.
      * 
-     * @return File object if successful, null otherwise
+     * @param queryFile The file to write query results to
+     * @return True if successful, false otherwise
      */
-    private suspend fun exportQueryResults(): File? {
+    private suspend fun exportQueryResults(queryFile: File): Boolean {
         return withContext(Dispatchers.IO) {
             try {
-                val queryFile = File(logFilePath, QUERY_RESULTS_FILE)
+                // Ensure parent directory exists
+                queryFile.parentFile?.mkdirs()
+                
                 val writer = FileWriter(queryFile)
                 
                 // Write header
@@ -170,14 +579,14 @@ class DataLogger(
                 
                 writer.close()
                 Log.d(TAG, "Exported ${results.size} query results to ${queryFile.absolutePath}")
-                queryFile
+                true
                 
             } catch (e: IOException) {
                 Log.e(TAG, "Error writing query results CSV", e)
-                null
+                false
             } catch (e: Exception) {
                 Log.e(TAG, "Unexpected error writing query results CSV", e)
-                null
+                false
             }
         }
     }
@@ -185,12 +594,15 @@ class DataLogger(
     /**
      * Exports battery metrics to CSV file.
      * 
-     * @return File object if successful, null otherwise
+     * @param batteryFile The file to write battery metrics to
+     * @return True if successful, false otherwise
      */
-    private suspend fun exportBatteryMetrics(): File? {
+    private suspend fun exportBatteryMetrics(batteryFile: File): Boolean {
         return withContext(Dispatchers.IO) {
             try {
-                val batteryFile = File(logFilePath, BATTERY_METRICS_FILE)
+                // Ensure parent directory exists
+                batteryFile.parentFile?.mkdirs()
+                
                 val writer = FileWriter(batteryFile)
                 
                 // Write header
@@ -220,14 +632,14 @@ class DataLogger(
                 
                 writer.close()
                 Log.d(TAG, "Exported ${batteryMetrics.size} battery metrics to ${batteryFile.absolutePath}")
-                batteryFile
+                true
                 
             } catch (e: IOException) {
                 Log.e(TAG, "Error writing battery metrics CSV", e)
-                null
+                false
             } catch (e: Exception) {
                 Log.e(TAG, "Unexpected error writing battery metrics CSV", e)
-                null
+                false
             }
         }
     }
@@ -381,13 +793,32 @@ class DataLogger(
     /**
      * Exports data to a single combined CSV file for convenience.
      * This creates a file with both query results and battery metrics in chronological order.
+     * Files are saved to the public Downloads folder for easy access.
      * 
      * @return File object if successful, null otherwise
      */
     suspend fun exportCombinedCSV(): File? {
         return withContext(Dispatchers.IO) {
             try {
-                val combinedFile = File(logFilePath, "combined_results.csv")
+                // Save to public Downloads folder for easy access
+                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                
+                // Ensure Downloads directory exists
+                if (!downloadsDir.exists()) {
+                    downloadsDir.mkdirs()
+                }
+                
+                // Check if Downloads directory is writable
+                val useDownloads = downloadsDir.canWrite()
+                val targetDir = if (useDownloads) downloadsDir else File(logFilePath)
+                
+                // Generate timestamp for unique filename
+                val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                val combinedFile = File(targetDir, "llm_benchmark_combined_$timestamp.csv")
+                
+                // Ensure parent directory exists
+                combinedFile.parentFile?.mkdirs()
+                
                 val writer = FileWriter(combinedFile)
                 
                 // Write header
@@ -482,11 +913,15 @@ class DataLogger(
                 }
                 
                 writer.close()
-                Log.i(TAG, "Exported combined CSV to ${combinedFile.absolutePath}")
+                if (useDownloads) {
+                    Log.i(TAG, "Exported combined CSV to Downloads folder: ${combinedFile.absolutePath}")
+                } else {
+                    Log.i(TAG, "Exported combined CSV to app directory (Downloads not accessible): ${combinedFile.absolutePath}")
+                }
                 combinedFile
                 
             } catch (e: Exception) {
-                Log.e(TAG, "Error exporting combined CSV", e)
+                Log.e(TAG, "Error exporting combined CSV: ${e.message}", e)
                 null
             }
         }

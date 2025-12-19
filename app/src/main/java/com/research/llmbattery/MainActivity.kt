@@ -1,12 +1,20 @@
 package com.research.llmbattery
 
 import android.Manifest
+import android.app.ActivityManager
 import android.app.AlertDialog
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.PowerManager
+import android.provider.Settings
 import android.util.Log
 import android.view.View
 import android.view.WindowManager
@@ -89,6 +97,45 @@ class MainActivity : AppCompatActivity() {
     
     // UI update coroutine
     private var uiUpdateJob: kotlinx.coroutines.Job? = null
+    
+    // Countdown update coroutine
+    private var countdownUpdateJob: kotlinx.coroutines.Job? = null
+    
+    // Broadcast receiver for benchmark updates
+    private val benchmarkReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                "BENCHMARK_UPDATE" -> {
+                    val queries = intent.getIntExtra("queries", 0)
+                    val totalQueries = intent.getIntExtra("total_queries", 0)
+                    val battery = intent.getIntExtra("battery", 0)
+                    val timeRemaining = intent.getStringExtra("time_remaining") ?: ""
+                    val timeRemainingMs = intent.getLongExtra("time_remaining_ms", 0L)
+                    
+                    // Update countdown view if benchmark is running
+                    if (isRunning && isCountdownViewActive) {
+                        updateCountdownView(queries, totalQueries, battery, timeRemainingMs)
+                    } else {
+                        // Update normal view
+                        tvQueriesCompleted.text = "Queries: $queries"
+                        tvBatteryLevel.text = "Battery: $battery%"
+                        tvEstBatteryLife.text = timeRemaining
+                    }
+                    
+                    Log.d(TAG, "Received benchmark update: queries=$queries, battery=$battery%, time=$timeRemaining")
+                }
+            }
+        }
+    }
+    
+    // Countdown view elements
+    private var tvTimeRemaining: TextView? = null
+    private var tvQueriesCount: TextView? = null
+    private var tvBatteryInfo: TextView? = null
+    private var tvDrainRate: TextView? = null
+    private var tvStatus: TextView? = null
+    private var btnStopBenchmark: Button? = null
+    private var isCountdownViewActive = false
     
     // Available models
     private val availableModels = listOf(
@@ -187,13 +234,73 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         
-        // Resume monitoring if benchmark was running
-        if (isRunning) {
-            batteryMonitor?.startMonitoring()
+        // Check if BenchmarkService is actually running
+        val serviceRunning = isServiceRunning(BenchmarkService::class.java)
+        
+        if (serviceRunning) {
+            // Service is running, update state
+            if (!isRunning) {
+                isRunning = true
+                Log.d(TAG, "Service is running, updating UI state")
+            }
+            // Don't start battery monitoring here - service has its own
             startUIUpdates()
+            
+            // Switch to countdown view if service is running (after UI is set up)
+            if (!isCountdownViewActive) {
+                switchToCountdownView()
+            }
+        } else {
+            // Service is not running, reset state
+            if (isRunning) {
+                isRunning = false
+                Log.d(TAG, "Service is not running, resetting state")
+            }
+            // Switch back to main view if service stopped
+            if (isCountdownViewActive) {
+                switchToMainView()
+            }
         }
         
-        Log.d(TAG, "MainActivity started")
+        updateUI()
+        Log.d(TAG, "MainActivity started, serviceRunning=$serviceRunning, isRunning=$isRunning")
+    }
+    
+    override fun onResume() {
+        super.onResume()
+        val filter = IntentFilter("BENCHMARK_UPDATE")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(benchmarkReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(benchmarkReceiver, filter)
+        }
+        Log.d(TAG, "BroadcastReceiver registered")
+    }
+    
+    override fun onPause() {
+        super.onPause()
+        try {
+            unregisterReceiver(benchmarkReceiver)
+            Log.d(TAG, "BroadcastReceiver unregistered")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error unregistering receiver", e)
+        }
+    }
+    
+    /**
+     * Checks if a service is currently running.
+     */
+    private fun isServiceRunning(serviceClass: Class<*>): Boolean {
+        val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val runningServices = activityManager.getRunningServices(Integer.MAX_VALUE)
+        
+        for (service in runningServices) {
+            if (serviceClass.name == service.service.className) {
+                return true
+            }
+        }
+        return false
     }
     
     override fun onStop() {
@@ -307,12 +414,110 @@ class MainActivity : AppCompatActivity() {
             
             // Button listeners
             btnStartStop.setOnClickListener {
-                if (isRunning) {
-                    // Stop benchmark
-                    stopBenchmark()
+                if (!isRunning) {
+                    // Double-check that service is not running (safety check)
+                    if (isServiceRunning(BenchmarkService::class.java)) {
+                        Log.w(TAG, "Service is running but isRunning flag is false, updating state")
+                        isRunning = true
+                        updateUI()
+                        Toast.makeText(this, "Benchmark is already running", Toast.LENGTH_SHORT).show()
+                        return@setOnClickListener
+                    }
+                    
+                    // Validate selection
+                    if (selectedModel == null) {
+                        Toast.makeText(this, "Please select a model first", Toast.LENGTH_SHORT).show()
+                        return@setOnClickListener
+                    }
+                    
+                    // Get interval from spinner
+                    val intervalMinutes = when (spinnerInterval.selectedItemPosition) {
+                        0 -> 1  // "1 minute"
+                        1 -> 5  // "5 minutes"
+                        else -> 5
+                    }
+                    
+                    // Get duration from EditText (in hours)
+                    val durationText = etDuration.text.toString().trim()
+                    if (durationText.isEmpty()) {
+                        Toast.makeText(this, "Please enter benchmark duration (in hours)", Toast.LENGTH_SHORT).show()
+                        return@setOnClickListener
+                    }
+                    
+                    val durationHours = try {
+                        durationText.toDouble()
+                    } catch (e: NumberFormatException) {
+                        Toast.makeText(this, "Invalid duration. Please enter a number.", Toast.LENGTH_SHORT).show()
+                        return@setOnClickListener
+                    }
+                    
+                    if (durationHours <= 0) {
+                        Toast.makeText(this, "Duration must be greater than 0", Toast.LENGTH_SHORT).show()
+                        return@setOnClickListener
+                    }
+                    
+                    // Convert hours to minutes for the service
+                    val durationMinutes = durationHours * 60.0
+                    
+                    // Calculate display duration for toast message
+                    val displayDuration = if (durationHours < 1.0) {
+                        val mins = (durationHours * 60).toInt()
+                        "$mins minute${if (mins != 1) "s" else ""}"
+                    } else if (durationHours == durationHours.toInt().toDouble()) {
+                        "${durationHours.toInt()} hour${if (durationHours.toInt() != 1) "s" else ""}"
+                    } else {
+                        val hours = durationHours.toInt()
+                        val mins = ((durationHours - hours) * 60).toInt()
+                        if (hours > 0) {
+                            "$hours hour${if (hours != 1) "s" else ""} $mins minute${if (mins != 1) "s" else ""}"
+                        } else {
+                            "$mins minute${if (mins != 1) "s" else ""}"
+                        }
+                    }
+                    
+                    // Request to ignore battery optimizations for continuous operation
+                    requestIgnoreBatteryOptimizations()
+                    
+                    // Start benchmark service
+                    // LLMService.loadModel() expects just the filename, it will look in Downloads folder
+                    val modelPath = selectedModel?.modelPath ?: ""
+                    Log.i(TAG, "Starting benchmark service - modelPath: '$modelPath', quantization: '${selectedModel?.quantization}', interval: $intervalMinutes, duration: $durationMinutes minutes")
+                    
+                    val intent = Intent(this, BenchmarkService::class.java).apply {
+                        action = BenchmarkService.ACTION_START
+                        putExtra(BenchmarkService.EXTRA_MODEL_PATH, modelPath)
+                        putExtra(BenchmarkService.EXTRA_QUANTIZATION, selectedModel?.quantization ?: "unknown")
+                        putExtra(BenchmarkService.EXTRA_INTERVAL_MINUTES, intervalMinutes)
+                        putExtra(BenchmarkService.EXTRA_DURATION_MINUTES, durationMinutes)  // Pass as minutes for precision
+                    }
+                    
+                    // Store benchmark timing for immediate countdown display
+                    benchmarkStartTimeMs = System.currentTimeMillis()
+                    benchmarkDurationMs = (durationMinutes * 60 * 1000L).toLong()
+                    benchmarkEndTimeMs = benchmarkStartTimeMs + benchmarkDurationMs
+                    
+                    Log.i(TAG, "Calling startForegroundService...")
+                    startForegroundService(intent)
+                    Log.i(TAG, "startForegroundService called")
+                    
+                    isRunning = true
+                    btnStartStop.text = "Stop Benchmark"
+                    Toast.makeText(this, "Benchmark started! Will run for $displayDuration", Toast.LENGTH_LONG).show()
+                    
+                    // Switch to countdown view (will use stored timing if broadcast hasn't arrived)
+                    switchToCountdownView()
+                    
                 } else {
-                    // Start benchmark (validate duration first)
-                    startBenchmarkWithDuration()
+                    // Stop benchmark
+                    val intent = Intent(this, BenchmarkService::class.java).apply {
+                        action = BenchmarkService.ACTION_STOP
+                    }
+                    startService(intent)
+                    
+                    isRunning = false
+                    switchToMainView()  // Switch back to main view
+                    updateUI()  // Re-enable spinner and update button
+                    Toast.makeText(this, "Benchmark stopped", Toast.LENGTH_SHORT).show()
                 }
             }
             btnExport.setOnClickListener {
@@ -895,12 +1100,252 @@ class MainActivity : AppCompatActivity() {
     }
     
     /**
+     * Requests to ignore battery optimizations so the service can run continuously
+     * even when the phone screen is off or in deep sleep mode.
+     */
+    private fun requestIgnoreBatteryOptimizations() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            val packageName = packageName
+            
+            if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+                try {
+                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                        data = Uri.parse("package:$packageName")
+                    }
+                    startActivity(intent)
+                    Log.i(TAG, "Requested to ignore battery optimizations for continuous operation")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not request battery optimization exemption: ${e.message}")
+                    // Fallback: Show instructions to user
+                    Toast.makeText(
+                        this,
+                        "For best results, please disable battery optimization for this app in Settings",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            } else {
+                Log.d(TAG, "Battery optimizations already ignored")
+            }
+        }
+    }
+    
+    /**
+     * Switches to the countdown timer view when benchmark is running.
+     */
+    private fun switchToCountdownView() {
+        try {
+            setContentView(R.layout.activity_benchmark_running)
+            isCountdownViewActive = true
+            
+            // Initialize countdown view elements
+            tvTimeRemaining = findViewById(R.id.tvTimeRemaining)
+            tvQueriesCount = findViewById(R.id.tvQueriesCount)
+            tvBatteryInfo = findViewById(R.id.tvBatteryInfo)
+            tvDrainRate = findViewById(R.id.tvDrainRate)
+            tvStatus = findViewById(R.id.tvStatus)
+            btnStopBenchmark = findViewById(R.id.btnStopBenchmark)
+            
+            // Set stop button listener
+            btnStopBenchmark?.setOnClickListener {
+                val intent = Intent(this, BenchmarkService::class.java).apply {
+                    action = BenchmarkService.ACTION_STOP
+                }
+                startService(intent)
+                isRunning = false
+                switchToMainView()
+                updateUI()
+                Toast.makeText(this, "Benchmark stopped", Toast.LENGTH_SHORT).show()
+            }
+            
+            // Request immediate update from service by checking if it's running
+            // and triggering a broadcast request
+            if (isServiceRunning(BenchmarkService::class.java)) {
+                // Service is running, send a request for update
+                // The service will send periodic updates, but we can also trigger one
+                Handler(Looper.getMainLooper()).postDelayed({
+                    // Give service a moment, then check if we got an update
+                    if (benchmarkEndTimeMs == 0L) {
+                        // Still no update, request one more time
+                        Log.d(TAG, "No benchmark time received yet, waiting for broadcast...")
+                    }
+                }, 1000)
+            }
+            
+            // Start countdown update loop for smooth updates
+            startCountdownUpdates()
+            
+            Log.d(TAG, "Switched to countdown view")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error switching to countdown view", e)
+        }
+    }
+    
+    /**
+     * Starts a coroutine to update the countdown timer every second for smooth display.
+     */
+    private fun startCountdownUpdates() {
+        countdownUpdateJob?.cancel()
+        countdownUpdateJob = lifecycleScope.launch {
+            while (isRunning && isCountdownViewActive) {
+                // Update timer every second for smooth countdown
+                // We'll calculate remaining time locally if broadcast hasn't arrived yet
+                updateCountdownTimer()
+                delay(1000) // Update every second
+            }
+        }
+    }
+    
+    // Store benchmark end time for local countdown calculation
+    private var benchmarkEndTimeMs: Long = 0
+    private var benchmarkStartTimeMs: Long = 0
+    private var benchmarkDurationMs: Long = 0
+    
+    /**
+     * Updates the countdown timer display with current remaining time.
+     */
+    private fun updateCountdownTimer() {
+        val remainingMs = if (benchmarkEndTimeMs > 0) {
+            maxOf(0, benchmarkEndTimeMs - System.currentTimeMillis())
+        } else if (benchmarkStartTimeMs > 0 && benchmarkDurationMs > 0) {
+            // Use stored timing if broadcast hasn't arrived yet
+            val elapsed = System.currentTimeMillis() - benchmarkStartTimeMs
+            maxOf(0, benchmarkDurationMs - elapsed)
+        } else {
+            0L
+        }
+        
+        if (remainingMs > 0 || benchmarkEndTimeMs > 0 || benchmarkStartTimeMs > 0) {
+            val hours = remainingMs / (60 * 60 * 1000)
+            val minutes = (remainingMs % (60 * 60 * 1000)) / (60 * 1000)
+            val seconds = (remainingMs % (60 * 1000)) / 1000
+            
+            val formattedTime = String.format("%02d:%02d:%02d", hours, minutes, seconds)
+            tvTimeRemaining?.text = formattedTime
+        }
+    }
+    
+    /**
+     * Stops the countdown update coroutine.
+     */
+    private fun stopCountdownUpdates() {
+        countdownUpdateJob?.cancel()
+        countdownUpdateJob = null
+    }
+    
+    /**
+     * Switches back to the main view when benchmark stops.
+     */
+    private fun switchToMainView() {
+        try {
+            stopCountdownUpdates()
+            setContentView(R.layout.activity_main)
+            isCountdownViewActive = false
+            
+            // Re-initialize main view components
+            initializeUIComponents()
+            setupUI()
+            
+            // Update UI state
+            updateUI()
+            
+            Log.d(TAG, "Switched to main view")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error switching to main view", e)
+        }
+    }
+    
+    /**
+     * Updates the countdown timer view with current benchmark status.
+     */
+    private fun updateCountdownView(queries: Int, totalQueries: Int, battery: Int, timeRemainingMs: Long) {
+        try {
+            // Update benchmark end time for local countdown
+            if (timeRemainingMs > 0) {
+                benchmarkEndTimeMs = System.currentTimeMillis() + timeRemainingMs
+            }
+            
+            // Format time as HH:MM:SS (use timeRemainingMs directly, or calculate from benchmarkEndTimeMs if available)
+            val remainingMs = if (timeRemainingMs > 0) {
+                timeRemainingMs
+            } else if (benchmarkEndTimeMs > 0) {
+                maxOf(0, benchmarkEndTimeMs - System.currentTimeMillis())
+            } else {
+                0L
+            }
+            
+            val hours = remainingMs / (60 * 60 * 1000)
+            val minutes = (remainingMs % (60 * 60 * 1000)) / (60 * 1000)
+            val seconds = (remainingMs % (60 * 1000)) / 1000
+            
+            val formattedTime = String.format("%02d:%02d:%02d", hours, minutes, seconds)
+            tvTimeRemaining?.text = formattedTime
+            
+            // Update queries count
+            tvQueriesCount?.text = "Queries: $queries / $totalQueries"
+            
+            // Update battery info
+            tvBatteryInfo?.text = "Battery: $battery%"
+            
+            // Get drain rate from battery monitor if available
+            val drainRate = batteryMonitor?.getBatteryDrainRate() ?: 0.0f
+            tvDrainRate?.text = "Drain Rate: ${String.format("%.1f", drainRate)}%/h"
+            
+            // Update status - show if query is running or waiting
+            if (queries < totalQueries && timeRemainingMs > 0) {
+                tvStatus?.text = "Running benchmark..."
+            } else if (timeRemainingMs <= 0) {
+                tvStatus?.text = "Complete!"
+            } else {
+                tvStatus?.text = ""
+            }
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Error updating countdown view", e)
+        }
+    }
+    
+    /**
+     * Parses time remaining string and formats it as HH:MM:SS.
+     * Input format: "2h 30m remaining" or "Complete"
+     * Output format: "02:30:00" or "00:00:00"
+     */
+    private fun parseTimeRemaining(timeRemaining: String): String {
+        return try {
+            if (timeRemaining.contains("Complete", ignoreCase = true)) {
+                "00:00:00"
+            } else {
+                // Parse "2h 30m remaining" format
+                var hours = 0
+                var minutes = 0
+                
+                val hourMatch = Regex("(\\d+)h").find(timeRemaining)
+                if (hourMatch != null) {
+                    hours = hourMatch.groupValues[1].toInt()
+                }
+                
+                val minuteMatch = Regex("(\\d+)m").find(timeRemaining)
+                if (minuteMatch != null) {
+                    minutes = minuteMatch.groupValues[1].toInt()
+                }
+                
+                // Format as HH:MM:SS (seconds always 0 for now)
+                String.format("%02d:%02d:00", hours, minutes)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error parsing time remaining: $timeRemaining", e)
+            "00:00:00"
+        }
+    }
+    
+    /**
      * Cleans up resources.
      */
     private fun cleanup() {
         try {
             // Stop UI updates
             stopUIUpdates()
+            stopCountdownUpdates()
             
             // Stop benchmark if running
             if (isRunning) {
