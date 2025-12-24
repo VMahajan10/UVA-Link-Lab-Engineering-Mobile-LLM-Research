@@ -43,7 +43,8 @@ class DataLogger(
         // CSV Headers
         private const val QUERY_HEADER = "timestamp,queryText,responseText,inferenceTimeMs,batteryLevel,quantization,modelName"
         private const val BATTERY_HEADER = "timestamp,batteryLevel,batteryDrainRate,cpuUsage,memoryUsage,temperature"
-        private const val INCREMENTAL_HEADER = "timestamp,query_number,query_text,response_text,inference_time_ms,battery_before,battery_after,battery_change_absolute,battery_drain_rate_per_hour,cpu_usage,memory_usage,temperature,model_name,quantization"
+        private const val INCREMENTAL_HEADER = "timestamp,query_number,prompt_number,query_text,response_text,response_length_chars,inference_time_ms,battery_before,battery_after,battery_change_absolute,battery_drain_rate_per_hour,cpu_usage_before,cpu_usage_after,cpu_usage_change,memory_usage_before,memory_usage_after,memory_usage_change_mb,temperature_before,temperature_after,temperature_change,model_name,quantization"
+        private const val PROMPTS_HEADER = "prompt_number,prompt_text"
     }
     
     // Properties
@@ -69,8 +70,13 @@ class DataLogger(
      * 
      * @param modelName Model name (for reference, stored in each row)
      * @param quantization Quantization level (for reference, stored in each row)
+     * @param prompts Optional list of prompts used in the benchmark. If provided, will be added as a separate section.
      */
-    suspend fun initializeIncrementalCSV(@Suppress("UNUSED_PARAMETER") modelName: String, @Suppress("UNUSED_PARAMETER") quantization: String) {
+    suspend fun initializeIncrementalCSV(
+        @Suppress("UNUSED_PARAMETER") modelName: String, 
+        @Suppress("UNUSED_PARAMETER") quantization: String,
+        prompts: List<String>? = null
+    ) {
         withContext(Dispatchers.IO) {
             lock.write {
                 try {
@@ -90,6 +96,8 @@ class DataLogger(
                     
                     incrementalCsvFile?.parentFile?.mkdirs()
                     incrementalCsvWriter = FileWriter(incrementalCsvFile, false) // Overwrite mode
+                    
+                    // Note: Prompts section will be added at the end with only used prompts
                     
                     // Write header
                     incrementalCsvWriter?.write(INCREMENTAL_HEADER)
@@ -131,6 +139,28 @@ class DataLogger(
                         return@withContext
                     }
                     
+                    // Calculate actual changes
+                    val batteryBeforeLevel = batteryBefore?.batteryLevel ?: queryResult.batteryLevel
+                    val batteryAfterLevel = queryResult.batteryLevel
+                    val batteryChange = batteryBeforeLevel - batteryAfterLevel
+                    
+                    val cpuBefore = batteryBefore?.cpuUsage ?: 0.0f
+                    val cpuAfter = batteryAfter?.cpuUsage ?: batteryBefore?.cpuUsage ?: 0.0f
+                    val cpuChange = cpuAfter - cpuBefore
+                    
+                    val memoryBefore = batteryBefore?.memoryUsage ?: 0L
+                    val memoryAfter = batteryAfter?.memoryUsage ?: batteryBefore?.memoryUsage ?: 0L
+                    val memoryChangeMB = (memoryAfter - memoryBefore) / (1024.0 * 1024.0)
+                    
+                    val tempBefore = batteryBefore?.temperature ?: 0.0f
+                    val tempAfter = batteryAfter?.temperature ?: batteryBefore?.temperature ?: 0.0f
+                    val tempChange = tempAfter - tempBefore
+                    
+                    val responseLength = queryResult.responseText.length
+                    
+                    // For incremental CSV, we don't have prompt number, so use 0
+                    val promptNumber = 0
+                    
                     val csvLine = buildString {
                         // Timestamp
                         append(escapeCsvField(formatTimestamp(queryResult.timestamp)))
@@ -138,6 +168,10 @@ class DataLogger(
                         
                         // Query number
                         append(queryNumber)
+                        append(CSV_DELIMITER)
+                        
+                        // Prompt number (0 for incremental, will be updated in final export)
+                        append(promptNumber)
                         append(CSV_DELIMITER)
                         
                         // Query text
@@ -148,20 +182,23 @@ class DataLogger(
                         append(escapeCsvField(queryResult.responseText))
                         append(CSV_DELIMITER)
                         
+                        // Response length
+                        append(responseLength)
+                        append(CSV_DELIMITER)
+                        
                         // Inference time
                         append(queryResult.inferenceTimeMs)
                         append(CSV_DELIMITER)
                         
                         // Battery before
-                        append(batteryBefore?.batteryLevel ?: queryResult.batteryLevel)
+                        append(batteryBeforeLevel)
                         append(CSV_DELIMITER)
                         
                         // Battery after
-                        append(queryResult.batteryLevel)
+                        append(batteryAfterLevel)
                         append(CSV_DELIMITER)
                         
-                        // Battery change (absolute)
-                        val batteryChange = (batteryBefore?.batteryLevel ?: queryResult.batteryLevel) - queryResult.batteryLevel
+                        // Battery change (absolute) - actual change
                         append(batteryChange)
                         append(CSV_DELIMITER)
                         
@@ -169,16 +206,40 @@ class DataLogger(
                         append(batteryAfter?.batteryDrainRate ?: batteryBefore?.batteryDrainRate ?: 0.0f)
                         append(CSV_DELIMITER)
                         
-                        // CPU usage
-                        append(batteryAfter?.cpuUsage ?: batteryBefore?.cpuUsage ?: 0.0f)
+                        // CPU usage before
+                        append(cpuBefore)
                         append(CSV_DELIMITER)
                         
-                        // Memory usage
-                        append(batteryAfter?.memoryUsage ?: batteryBefore?.memoryUsage ?: 0L)
+                        // CPU usage after
+                        append(cpuAfter)
                         append(CSV_DELIMITER)
                         
-                        // Temperature
-                        append(batteryAfter?.temperature ?: batteryBefore?.temperature ?: 0.0f)
+                        // CPU usage change
+                        append(cpuChange)
+                        append(CSV_DELIMITER)
+                        
+                        // Memory usage before
+                        append(memoryBefore)
+                        append(CSV_DELIMITER)
+                        
+                        // Memory usage after
+                        append(memoryAfter)
+                        append(CSV_DELIMITER)
+                        
+                        // Memory usage change (MB)
+                        append(String.format(Locale.US, "%.2f", memoryChangeMB))
+                        append(CSV_DELIMITER)
+                        
+                        // Temperature before
+                        append(tempBefore)
+                        append(CSV_DELIMITER)
+                        
+                        // Temperature after
+                        append(tempAfter)
+                        append(CSV_DELIMITER)
+                        
+                        // Temperature change
+                        append(String.format(Locale.US, "%.1f", tempChange))
                         append(CSV_DELIMITER)
                         
                         // Model name
@@ -206,9 +267,10 @@ class DataLogger(
      * This method matches each query with battery metrics before and after the query.
      * Should be called at the end of benchmark after all data is collected.
      * 
+     * @param prompts Optional list of prompts used in the benchmark. If provided, will be added as a separate section.
      * @return File object representing the CSV file, or null if export fails
      */
-    suspend fun exportAllDataToCSV(): File? {
+    suspend fun exportAllDataToCSV(prompts: List<String>? = null): File? {
         return withContext(Dispatchers.IO) {
             try {
                 // Save to public Downloads folder for easy access
@@ -229,12 +291,58 @@ class DataLogger(
                 csvFile.parentFile?.mkdirs()
                 val writer = FileWriter(csvFile, false) // Overwrite mode
                 
+                // Get all data first
+                val queryResults = lock.read { results.toList() }
+                
+                // Only show prompts that were actually used in the benchmark
+                if (queryResults.isNotEmpty()) {
+                    // Extract unique prompts that were actually used
+                    val usedPrompts = queryResults.map { it.queryText }.distinct()
+                    
+                    // Create a mapping of prompt to its index in the original list (if provided)
+                    val promptToIndex = mutableMapOf<String, Int>()
+                    if (prompts != null) {
+                        prompts.forEachIndexed { index, prompt ->
+                            promptToIndex[prompt] = index + 1
+                        }
+                    }
+                    
+                    writer.write("# ========================================")
+                    writer.write(NEWLINE)
+                    writer.write("# PROMPTS ACTUALLY USED IN THIS BENCHMARK")
+                    writer.write(NEWLINE)
+                    writer.write("# Total prompts available: ${prompts?.size ?: "unknown"}, Prompts used: ${usedPrompts.size}")
+                    writer.write(NEWLINE)
+                    writer.write("# ========================================")
+                    writer.write(NEWLINE)
+                    writer.write("prompt_number,prompt_text,times_used")
+                    writer.write(NEWLINE)
+                    
+                    // Show each used prompt with how many times it was used
+                    usedPrompts.forEach { usedPrompt ->
+                        val timesUsed = queryResults.count { it.queryText == usedPrompt }
+                        val promptNumber = promptToIndex[usedPrompt] ?: "?"
+                        writer.write("$promptNumber")
+                        writer.write(CSV_DELIMITER)
+                        writer.write(escapeCsvField(usedPrompt))
+                        writer.write(CSV_DELIMITER)
+                        writer.write("$timesUsed")
+                        writer.write(NEWLINE)
+                    }
+                    writer.write(NEWLINE)
+                    writer.write("# ========================================")
+                    writer.write(NEWLINE)
+                    writer.write("# BENCHMARK RESULTS")
+                    writer.write(NEWLINE)
+                    writer.write("# ========================================")
+                    writer.write(NEWLINE)
+                }
+                
                 // Write header
                 writer.write(INCREMENTAL_HEADER)
                 writer.write(NEWLINE)
                 
-                // Get all data
-                val queryResults = lock.read { results.toList() }
+                // Get battery metrics (queryResults already retrieved above)
                 val allBatteryMetrics = lock.read { batteryMetrics.toList() }
                 
                 Log.i(TAG, "=== CSV EXPORT START ===")
@@ -248,10 +356,19 @@ class DataLogger(
                     Log.w(TAG, "WARNING: No battery metrics to export!")
                 }
                 
+                // Create a mapping of prompt text to its number in the original list
+                val promptToNumber = mutableMapOf<String, Int>()
+                if (prompts != null) {
+                    prompts.forEachIndexed { index, prompt ->
+                        promptToNumber[prompt] = index + 1
+                    }
+                }
+                
                 // Write each query with matching battery metrics
                 var rowsWritten = 0
                 queryResults.forEachIndexed { index, queryResult ->
                     val queryNumber = index + 1
+                    val promptNumber = promptToNumber[queryResult.queryText] ?: 0
                     
                     // Find battery metrics closest to this query timestamp
                     val queryTime = queryResult.timestamp
@@ -262,6 +379,25 @@ class DataLogger(
                         .filter { it.timestamp >= queryTime }
                         .minByOrNull { it.timestamp }
                     
+                    // Calculate actual changes
+                    val batteryBeforeLevel = batteryBefore?.batteryLevel ?: queryResult.batteryLevel
+                    val batteryAfterLevel = queryResult.batteryLevel
+                    val batteryChange = batteryBeforeLevel - batteryAfterLevel  // Actual change (before - after)
+                    
+                    val cpuBefore = batteryBefore?.cpuUsage ?: 0.0f
+                    val cpuAfter = batteryAfter?.cpuUsage ?: batteryBefore?.cpuUsage ?: 0.0f
+                    val cpuChange = cpuAfter - cpuBefore
+                    
+                    val memoryBefore = batteryBefore?.memoryUsage ?: 0L
+                    val memoryAfter = batteryAfter?.memoryUsage ?: batteryBefore?.memoryUsage ?: 0L
+                    val memoryChangeMB = (memoryAfter - memoryBefore) / (1024.0 * 1024.0)  // Convert to MB
+                    
+                    val tempBefore = batteryBefore?.temperature ?: 0.0f
+                    val tempAfter = batteryAfter?.temperature ?: batteryBefore?.temperature ?: 0.0f
+                    val tempChange = tempAfter - tempBefore
+                    
+                    val responseLength = queryResult.responseText.length
+                    
                     val csvLine = buildString {
                         // Timestamp
                         append(escapeCsvField(formatTimestamp(queryResult.timestamp)))
@@ -269,6 +405,10 @@ class DataLogger(
                         
                         // Query number
                         append(queryNumber)
+                        append(CSV_DELIMITER)
+                        
+                        // Prompt number (from original prompt list)
+                        append(promptNumber)
                         append(CSV_DELIMITER)
                         
                         // Query text
@@ -279,20 +419,23 @@ class DataLogger(
                         append(escapeCsvField(queryResult.responseText))
                         append(CSV_DELIMITER)
                         
+                        // Response length
+                        append(responseLength)
+                        append(CSV_DELIMITER)
+                        
                         // Inference time
                         append(queryResult.inferenceTimeMs)
                         append(CSV_DELIMITER)
                         
                         // Battery before
-                        append(batteryBefore?.batteryLevel ?: queryResult.batteryLevel)
+                        append(batteryBeforeLevel)
                         append(CSV_DELIMITER)
                         
                         // Battery after
-                        append(queryResult.batteryLevel)
+                        append(batteryAfterLevel)
                         append(CSV_DELIMITER)
                         
-                        // Battery change (absolute)
-                        val batteryChange = (batteryBefore?.batteryLevel ?: queryResult.batteryLevel) - queryResult.batteryLevel
+                        // Battery change (absolute) - actual change
                         append(batteryChange)
                         append(CSV_DELIMITER)
                         
@@ -300,16 +443,40 @@ class DataLogger(
                         append(batteryAfter?.batteryDrainRate ?: batteryBefore?.batteryDrainRate ?: 0.0f)
                         append(CSV_DELIMITER)
                         
-                        // CPU usage
-                        append(batteryAfter?.cpuUsage ?: batteryBefore?.cpuUsage ?: 0.0f)
+                        // CPU usage before
+                        append(cpuBefore)
                         append(CSV_DELIMITER)
                         
-                        // Memory usage
-                        append(batteryAfter?.memoryUsage ?: batteryBefore?.memoryUsage ?: 0L)
+                        // CPU usage after
+                        append(cpuAfter)
                         append(CSV_DELIMITER)
                         
-                        // Temperature
-                        append(batteryAfter?.temperature ?: batteryBefore?.temperature ?: 0.0f)
+                        // CPU usage change
+                        append(cpuChange)
+                        append(CSV_DELIMITER)
+                        
+                        // Memory usage before
+                        append(memoryBefore)
+                        append(CSV_DELIMITER)
+                        
+                        // Memory usage after
+                        append(memoryAfter)
+                        append(CSV_DELIMITER)
+                        
+                        // Memory usage change (MB)
+                        append(String.format(Locale.US, "%.2f", memoryChangeMB))
+                        append(CSV_DELIMITER)
+                        
+                        // Temperature before
+                        append(tempBefore)
+                        append(CSV_DELIMITER)
+                        
+                        // Temperature after
+                        append(tempAfter)
+                        append(CSV_DELIMITER)
+                        
+                        // Temperature change
+                        append(String.format(Locale.US, "%.1f", tempChange))
                         append(CSV_DELIMITER)
                         
                         // Model name

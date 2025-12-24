@@ -28,26 +28,123 @@ class BenchmarkService : Service() {
     private lateinit var dataLogger: DataLogger
     
     private val testQueries = listOf(
+        // Science & Technology
         "What is machine learning?",
         "Explain quantum computing simply.",
-        "Write a haiku about AI.",
-        "What are renewable energy benefits?",
         "How does photosynthesis work?",
-        "What is the capital of France?",
-        "Explain relativity theory.",
-        "What causes seasons?",
-        "How do computers work?",
         "What is DNA?",
-        "Describe the water cycle.",
-        "What is climate change?",
-        "How does internet work?",
-        "What is democracy?",
+        "Explain relativity theory.",
         "Explain gravity simply.",
-        "What are primary colors?",
-        "How do vaccines work?",
-        "What is biodiversity?",
+        "How do computers work?",
+        "How does internet work?",
         "How do batteries work?",
-        "What is scientific method?"
+        "What is the scientific method?",
+        "How do vaccines work?",
+        "What causes seasons?",
+        "Describe the water cycle.",
+        "What is evolution?",
+        "How does the human brain work?",
+        "What is the difference between weather and climate?",
+        "Explain how solar panels generate electricity.",
+        "What is artificial intelligence?",
+        "How do satellites stay in orbit?",
+        "What is the greenhouse effect?",
+        
+        // Environment & Energy
+        "What are renewable energy benefits?",
+        "What is climate change?",
+        "What is biodiversity?",
+        "How does recycling help the environment?",
+        "What causes air pollution?",
+        "Explain the carbon cycle.",
+        "What are fossil fuels?",
+        "How does deforestation affect ecosystems?",
+        "What is sustainable development?",
+        "How do wind turbines generate power?",
+        
+        // Geography & History
+        "What is the capital of France?",
+        "What is the largest ocean?",
+        "How many continents are there?",
+        "What is the longest river in the world?",
+        "Explain the difference between a country and a continent.",
+        "What caused World War I?",
+        "Who invented the telephone?",
+        "What is the Great Wall of China?",
+        "How did the Industrial Revolution change society?",
+        "What is the significance of the Renaissance?",
+        
+        // Social Sciences
+        "What is democracy?",
+        "What is the difference between capitalism and socialism?",
+        "How does the economy work?",
+        "What is the purpose of government?",
+        "Explain the concept of human rights.",
+        "What is cultural diversity?",
+        "How do societies organize themselves?",
+        "What is the role of education in society?",
+        "Explain the concept of justice.",
+        "What is globalization?",
+        
+        // Arts & Literature
+        "Write a haiku about AI.",
+        "What are primary colors?",
+        "What is the difference between a novel and a short story?",
+        "Explain the concept of perspective in art.",
+        "What is poetry?",
+        "How does music affect emotions?",
+        "What is the purpose of storytelling?",
+        "Explain the color wheel.",
+        "What is the difference between modern and contemporary art?",
+        "How do films tell stories?",
+        
+        // Mathematics & Logic
+        "What is the Pythagorean theorem?",
+        "Explain the concept of infinity.",
+        "What is probability?",
+        "How do you calculate percentages?",
+        "What is the Fibonacci sequence?",
+        "Explain the concept of zero.",
+        "What is algebra?",
+        "How does geometry relate to the real world?",
+        "What is calculus used for?",
+        "Explain the concept of prime numbers.",
+        
+        // Health & Medicine
+        "How does the immune system work?",
+        "What is the importance of exercise?",
+        "Explain how the heart pumps blood.",
+        "What is nutrition?",
+        "How do antibiotics work?",
+        "What is mental health?",
+        "Explain the importance of sleep.",
+        "What is the difference between a virus and bacteria?",
+        "How does the digestive system work?",
+        "What is the role of vitamins in the body?",
+        
+        // Philosophy & Ethics
+        "What is the meaning of life?",
+        "Explain the concept of free will.",
+        "What is ethics?",
+        "What is the difference between right and wrong?",
+        "Explain the concept of truth.",
+        "What is consciousness?",
+        "How do we know what we know?",
+        "What is the purpose of philosophy?",
+        "Explain the concept of morality.",
+        "What is the nature of reality?",
+        
+        // Practical & Everyday
+        "How do I learn a new language?",
+        "What are good study habits?",
+        "How do I manage my time effectively?",
+        "What is the importance of communication?",
+        "How do I solve problems?",
+        "What makes a good leader?",
+        "How do I build good relationships?",
+        "What is critical thinking?",
+        "How do I make good decisions?",
+        "What is the importance of curiosity?"
     )
     
     private var currentQueryIndex = 0
@@ -478,7 +575,7 @@ $query<|im_end|>
                 // Export all collected data to CSV file (created only now, at the end)
                 Log.e(TAG, "Exporting all collected data to CSV file...")
                 updateNotification("Exporting results...")
-                val csvFile = dataLogger.exportAllDataToCSV()
+                val csvFile = dataLogger.exportAllDataToCSV(prompts = testQueries)
                 Log.e(TAG, "=== CSV FILE EXPORTED ===")
                 Log.e(TAG, "File: ${csvFile?.absolutePath ?: "FAILED"}")
                 if (csvFile != null) {

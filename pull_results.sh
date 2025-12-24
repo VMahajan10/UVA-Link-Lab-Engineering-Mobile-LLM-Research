@@ -24,7 +24,7 @@ for file in $CSV_FILES; do
     # Remove /sdcard prefix and pull
     local_file=$(basename "$file")
     echo "Pulling: $local_file"
-    ./android-sdk/platform-tools/adb pull "$file" "$RESULTS_DIR/$local_file" 2>/dev/null
+    ./android-sdk/platform-tools/adb -s "$DEVICE" pull "$file" "$RESULTS_DIR/$local_file" 2>/dev/null
     if [ -f "$RESULTS_DIR/$local_file" ]; then
         PULLED_COUNT=$((PULLED_COUNT + 1))
     fi
