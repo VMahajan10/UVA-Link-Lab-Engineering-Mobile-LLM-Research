@@ -1,7 +1,13 @@
 package com.research.llmbattery
 
+import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
+import android.media.MediaScannerConnection
+import android.net.Uri
+import android.os.Build
 import android.os.Environment
+import android.provider.MediaStore
 import android.util.Log
 import com.research.llmbattery.models.BatteryMetrics
 import com.research.llmbattery.models.QueryResult
@@ -43,7 +49,7 @@ class DataLogger(
         // CSV Headers
         private const val QUERY_HEADER = "timestamp,queryText,responseText,inferenceTimeMs,batteryLevel,quantization,modelName"
         private const val BATTERY_HEADER = "timestamp,batteryLevel,batteryDrainRate,cpuUsage,memoryUsage,temperature"
-        private const val INCREMENTAL_HEADER = "timestamp,query_number,prompt_number,query_text,response_text,response_length_chars,inference_time_ms,battery_before,battery_after,battery_change_absolute,battery_drain_rate_per_hour,cpu_usage_before,cpu_usage_after,cpu_usage_change,memory_usage_before,memory_usage_after,memory_usage_change_mb,temperature_before,temperature_after,temperature_change,model_name,quantization"
+        private const val INCREMENTAL_HEADER = "timestamp,query_number,prompt_number,query_text,response_text,response_length_chars,inference_time_ms,battery_before,battery_after,battery_drop,cpu_usage_before,cpu_usage_after,cpu_usage_change,memory_usage_before,memory_usage_after,memory_usage_change_mb,temperature_before,temperature_after,temperature_change,model_name,quantization"
         private const val PROMPTS_HEADER = "prompt_number,prompt_text"
     }
     
@@ -198,12 +204,8 @@ class DataLogger(
                         append(batteryAfterLevel)
                         append(CSV_DELIMITER)
                         
-                        // Battery change (absolute) - actual change
+                        // Battery drop (actual decrease after query)
                         append(batteryChange)
-                        append(CSV_DELIMITER)
-                        
-                        // Battery drain rate (projected per hour)
-                        append(batteryAfter?.batteryDrainRate ?: batteryBefore?.batteryDrainRate ?: 0.0f)
                         append(CSV_DELIMITER)
                         
                         // CPU usage before
@@ -268,9 +270,17 @@ class DataLogger(
      * Should be called at the end of benchmark after all data is collected.
      * 
      * @param prompts Optional list of prompts used in the benchmark. If provided, will be added as a separate section.
+     * @param originalDurationMinutes Original benchmark duration in minutes (for early termination metadata)
+     * @param timeRemainingMinutes Time remaining when benchmark stopped (for early termination metadata)
+     * @param terminationReason Reason for early termination (e.g., "Battery died at 5%")
      * @return File object representing the CSV file, or null if export fails
      */
-    suspend fun exportAllDataToCSV(prompts: List<String>? = null): File? {
+    suspend fun exportAllDataToCSV(
+        prompts: List<String>? = null,
+        originalDurationMinutes: Double? = null,
+        timeRemainingMinutes: Double? = null,
+        terminationReason: String? = null
+    ): File? {
         return withContext(Dispatchers.IO) {
             try {
                 // Save to public Downloads folder for easy access
@@ -289,10 +299,22 @@ class DataLogger(
                 }
                 
                 csvFile.parentFile?.mkdirs()
+                
+                // Ensure parent directory exists and is writable
+                val parentDir = csvFile.parentFile
+                if (parentDir != null && !parentDir.exists()) {
+                    Log.e(TAG, "ERROR: Parent directory does not exist: ${parentDir.absolutePath}")
+                }
+                if (parentDir != null && !parentDir.canWrite()) {
+                    Log.e(TAG, "ERROR: Parent directory is not writable: ${parentDir.absolutePath}")
+                }
+                
+                Log.i(TAG, "Creating CSV file at: ${csvFile.absolutePath}")
                 val writer = FileWriter(csvFile, false) // Overwrite mode
                 
                 // Get all data first
                 val queryResults = lock.read { results.toList() }
+                Log.i(TAG, "Retrieved ${queryResults.size} query results from memory")
                 
                 // Only show prompts that were actually used in the benchmark
                 if (queryResults.isNotEmpty()) {
@@ -330,13 +352,37 @@ class DataLogger(
                         writer.write(NEWLINE)
                     }
                     writer.write(NEWLINE)
+                }
+                
+                // Add early termination metadata if applicable
+                if (terminationReason != null || originalDurationMinutes != null) {
                     writer.write("# ========================================")
                     writer.write(NEWLINE)
-                    writer.write("# BENCHMARK RESULTS")
+                    writer.write("# BENCHMARK TERMINATION INFO")
                     writer.write(NEWLINE)
                     writer.write("# ========================================")
+                    writer.write(NEWLINE)
+                    if (originalDurationMinutes != null) {
+                        writer.write("# Original benchmark duration: ${originalDurationMinutes} minutes (${originalDurationMinutes / 60.0} hours)")
+                        writer.write(NEWLINE)
+                    }
+                    if (timeRemainingMinutes != null) {
+                        writer.write("# Time remaining when stopped: ${timeRemainingMinutes} minutes (${timeRemainingMinutes / 60.0} hours)")
+                        writer.write(NEWLINE)
+                    }
+                    if (terminationReason != null) {
+                        writer.write("# Termination reason: $terminationReason")
+                        writer.write(NEWLINE)
+                    }
                     writer.write(NEWLINE)
                 }
+                
+                writer.write("# ========================================")
+                writer.write(NEWLINE)
+                writer.write("# BENCHMARK RESULTS")
+                writer.write(NEWLINE)
+                writer.write("# ========================================")
+                writer.write(NEWLINE)
                 
                 // Write header
                 writer.write(INCREMENTAL_HEADER)
@@ -351,6 +397,7 @@ class DataLogger(
                 
                 if (queryResults.isEmpty()) {
                     Log.w(TAG, "WARNING: No query results to export!")
+                    // Still write header even if no results, so file is created
                 }
                 if (allBatteryMetrics.isEmpty()) {
                     Log.w(TAG, "WARNING: No battery metrics to export!")
@@ -366,7 +413,8 @@ class DataLogger(
                 
                 // Write each query with matching battery metrics
                 var rowsWritten = 0
-                queryResults.forEachIndexed { index, queryResult ->
+                if (queryResults.isNotEmpty()) {
+                    queryResults.forEachIndexed { index, queryResult ->
                     val queryNumber = index + 1
                     val promptNumber = promptToNumber[queryResult.queryText] ?: 0
                     
@@ -435,12 +483,8 @@ class DataLogger(
                         append(batteryAfterLevel)
                         append(CSV_DELIMITER)
                         
-                        // Battery change (absolute) - actual change
+                        // Battery drop (actual decrease after query)
                         append(batteryChange)
-                        append(CSV_DELIMITER)
-                        
-                        // Battery drain rate (projected per hour)
-                        append(batteryAfter?.batteryDrainRate ?: batteryBefore?.batteryDrainRate ?: 0.0f)
                         append(CSV_DELIMITER)
                         
                         // CPU usage before
@@ -491,22 +535,38 @@ class DataLogger(
                     writer.write(csvLine)
                     rowsWritten++
                 }
+            }
                 
                 writer.flush()
                 writer.close()
                 
+                // Force sync to ensure file is written to disk
+                try {
+                    java.io.FileOutputStream(csvFile, true).use { fos ->
+                        fos.fd.sync()
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not sync file descriptor: ${e.message}")
+                }
+                
                 // Small delay to ensure file system has flushed
-                kotlinx.coroutines.delay(100)
+                kotlinx.coroutines.delay(200)
                 
                 // Verify file was written correctly
-                val fileSize = csvFile.length()
                 val fileExists = csvFile.exists()
+                val fileSize = if (fileExists) csvFile.length() else 0L
                 
                 Log.i(TAG, "=== CSV EXPORT COMPLETE ===")
                 Log.i(TAG, "Rows written: $rowsWritten (expected: ${queryResults.size})")
                 Log.i(TAG, "File path: ${csvFile.absolutePath}")
-                Log.i(TAG, "File size: $fileSize bytes")
                 Log.i(TAG, "File exists: $fileExists")
+                Log.i(TAG, "File size: $fileSize bytes")
+                
+                if (!fileExists) {
+                    Log.e(TAG, "ERROR: CSV file was not created!")
+                    Log.e(TAG, "Parent directory exists: ${csvFile.parentFile?.exists()}")
+                    Log.e(TAG, "Parent directory writable: ${csvFile.parentFile?.canWrite()}")
+                }
                 
                 if (fileSize == 0L) {
                     Log.e(TAG, "ERROR: CSV file is empty (0 bytes)!")
@@ -519,6 +579,9 @@ class DataLogger(
                     Log.e(TAG, "Battery metrics available: ${allBatteryMetrics.size}")
                 } else {
                     Log.i(TAG, "✅ CSV export successful: $rowsWritten rows, $fileSize bytes")
+                    
+                    // Scan the file to make it immediately visible in file managers
+                    scanFileForMediaStore(csvFile)
                 }
                 
                 csvFile
@@ -546,6 +609,12 @@ class DataLogger(
                     incrementalCsvFile = null
                     isIncrementalFileInitialized = false
                     Log.i(TAG, "Closed incremental CSV: ${file?.absolutePath}")
+                    
+                    // Scan the file to make it immediately visible
+                    if (file != null && file.exists()) {
+                        scanFileForMediaStore(file)
+                    }
+                    
                     file
                 } catch (e: Exception) {
                     Log.e(TAG, "Error closing incremental CSV", e)
@@ -647,6 +716,14 @@ class DataLogger(
                 val batteryExported = exportBatteryMetrics(batteryFile)
                 
                 if (queryExported && batteryExported) {
+                    // Scan files to make them immediately visible
+                    if (queryFile.exists()) {
+                        scanFileForMediaStore(queryFile)
+                    }
+                    if (batteryFile.exists()) {
+                        scanFileForMediaStore(batteryFile)
+                    }
+                    
                     Log.i(TAG, "Successfully exported data to Downloads folder")
                     Log.i(TAG, "Query results: ${queryFile.absolutePath}")
                     Log.i(TAG, "Battery metrics: ${batteryFile.absolutePath}")
@@ -687,6 +764,14 @@ class DataLogger(
                 val batteryExported = exportBatteryMetrics(batteryFile)
                 
                 if (queryExported && batteryExported) {
+                    // Scan files to make them immediately visible
+                    if (queryFile.exists()) {
+                        scanFileForMediaStore(queryFile)
+                    }
+                    if (batteryFile.exists()) {
+                        scanFileForMediaStore(batteryFile)
+                    }
+                    
                     Log.i(TAG, "Exported data to app directory (Downloads not accessible)")
                     Log.i(TAG, "Query results: ${queryFile.absolutePath}")
                     Log.i(TAG, "Battery metrics: ${batteryFile.absolutePath}")
@@ -943,6 +1028,106 @@ class DataLogger(
     }
     
     /**
+     * Scans a file to make it immediately visible in file managers and MediaStore.
+     * This is necessary because Android's MediaStore may not immediately detect new files.
+     * For Android 10+, uses MediaStore API to ensure proper USB MTP visibility.
+     * 
+     * @param file The file to scan
+     */
+    private fun scanFileForMediaStore(file: File) {
+        try {
+            // Always use MediaScannerConnection as the primary method
+            // It works reliably across all Android versions and ensures MTP visibility
+            scanWithMediaScanner(file)
+            
+            // For Android 10+, also try to update MediaStore directly for better MTP support
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                try {
+                    // Wait a bit for MediaScannerConnection to process
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        try {
+                            // Try to find and update the file in MediaStore
+                            val selection = "${MediaStore.Downloads.DISPLAY_NAME} = ? AND ${MediaStore.Downloads.RELATIVE_PATH} LIKE ?"
+                            val selectionArgs = arrayOf(file.name, "%${Environment.DIRECTORY_DOWNLOADS}%")
+                            val projection = arrayOf(MediaStore.Downloads._ID, MediaStore.Downloads.DATE_MODIFIED)
+                            
+                            val cursor = context.contentResolver.query(
+                                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                                projection,
+                                selection,
+                                selectionArgs,
+                                "${MediaStore.Downloads.DATE_MODIFIED} DESC"
+                            )
+                            
+                            cursor?.use {
+                                if (it.moveToFirst()) {
+                                    // File exists in MediaStore, update its metadata
+                                    val idColumn = it.getColumnIndexOrThrow(MediaStore.Downloads._ID)
+                                    val id = it.getLong(idColumn)
+                                    val uri = android.content.ContentUris.withAppendedId(
+                                        MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                                        id
+                                    )
+                                    
+                                    val contentValues = ContentValues().apply {
+                                        put(MediaStore.Downloads.DATE_MODIFIED, System.currentTimeMillis() / 1000)
+                                        put(MediaStore.Downloads.SIZE, file.length())
+                                        put(MediaStore.Downloads.IS_PENDING, 0)
+                                    }
+                                    
+                                    val updated = context.contentResolver.update(uri, contentValues, null, null)
+                                    if (updated > 0) {
+                                        Log.i(TAG, "Updated MediaStore entry for MTP visibility: ${file.absolutePath}")
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "MediaStore update failed (non-critical): ${e.message}")
+                        }
+                    }, 500) // Wait 500ms for MediaScannerConnection to complete
+                } catch (e: Exception) {
+                    Log.w(TAG, "MediaStore update attempt failed: ${e.message}")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error scanning file for MediaStore: ${e.message}", e)
+            // Don't fail the export if scanning fails - file is still written
+        }
+    }
+    
+    /**
+     * Helper method to scan file using MediaScannerConnection.
+     * 
+     * @param file The file to scan
+     */
+    private fun scanWithMediaScanner(file: File) {
+        MediaScannerConnection.scanFile(
+            context,
+            arrayOf(file.absolutePath),
+            arrayOf("text/csv"),
+            object : MediaScannerConnection.OnScanCompletedListener {
+                override fun onScanCompleted(path: String?, uri: Uri?) {
+                    if (uri != null) {
+                        Log.i(TAG, "File successfully scanned via MediaScannerConnection: $path")
+                        
+                        // Broadcast that a new file was added to help with MTP visibility
+                        try {
+                            val intent = Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, uri)
+                            context.sendBroadcast(intent)
+                            Log.d(TAG, "Broadcast sent for file: $path")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to send broadcast: ${e.message}")
+                        }
+                    } else {
+                        Log.w(TAG, "File scan completed but URI is null: $path")
+                    }
+                }
+            }
+        )
+        Log.i(TAG, "File scan initiated via MediaScannerConnection: ${file.absolutePath}")
+    }
+    
+    /**
      * Formats a timestamp to a human-readable string.
      * 
      * @param timestamp The timestamp in milliseconds
@@ -1079,7 +1264,14 @@ class DataLogger(
                     writer.write(csvLine)
                 }
                 
+                writer.flush()
                 writer.close()
+                
+                // Scan the file to make it immediately visible
+                if (combinedFile.exists()) {
+                    scanFileForMediaStore(combinedFile)
+                }
+                
                 if (useDownloads) {
                     Log.i(TAG, "Exported combined CSV to Downloads folder: ${combinedFile.absolutePath}")
                 } else {

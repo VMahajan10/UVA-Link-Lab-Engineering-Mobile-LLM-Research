@@ -73,8 +73,6 @@ while true; do
         
         # Get list of CSV files on phone
         PHONE_FILES=$(./android-sdk/platform-tools/adb -s "$DEVICE" shell "ls -t /sdcard/Download/llm_benchmark_*.csv 2>/dev/null" | tr -d '\r')
-        # Get list of CSV files on phone
-        PHONE_FILES=$(./android-sdk/platform-tools/adb shell "ls /sdcard/Download/llm_benchmark_*.csv 2>/dev/null" | tr -d '\r')
         
         if [ ! -z "$PHONE_FILES" ]; then
             NEW_FILES_FOUND=false

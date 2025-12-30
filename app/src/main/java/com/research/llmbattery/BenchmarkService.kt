@@ -153,6 +153,8 @@ class BenchmarkService : Service() {
     private var startTimeMs = 0L
     private var endTimeMs = 0L
     private var totalQueries = 0
+    private var originalDurationMinutes = 0.0
+    private val CRITICAL_BATTERY_LEVEL = 5 // Export CSV when battery drops to 5%
     
     companion object {
         private const val TAG = "BenchmarkService"
@@ -377,6 +379,7 @@ class BenchmarkService : Service() {
                 
                 // Convert minutes to milliseconds
                 Log.e(TAG, "Calculating benchmark timing...")
+                originalDurationMinutes = durationMinutes // Store original duration for metadata
                 startTimeMs = System.currentTimeMillis()
                 val durationMs = (durationMinutes * 60 * 1000L).toLong()
                 endTimeMs = startTimeMs + durationMs
@@ -475,6 +478,14 @@ $query<|im_end|>
                     dataLogger.logBattery(batteryAfter)  // Log after metrics
                     Log.i(TAG, "Query $queriesCompleted data stored in memory (will be exported to CSV at end)")
                     
+                    // Check battery level after query - if critically low, save CSV immediately
+                    val batteryLevelAfterQuery = batteryMonitor.getCurrentBatteryLevel()
+                    if (batteryLevelAfterQuery <= CRITICAL_BATTERY_LEVEL && batteryLevelAfterQuery > 0) {
+                        Log.e(TAG, "⚠️ CRITICAL BATTERY LEVEL after query: $batteryLevelAfterQuery% - Saving CSV immediately before phone dies")
+                        handleEarlyTermination("Battery died at ${batteryLevelAfterQuery}%")
+                        return@launch // Exit coroutine
+                    }
+                    
                     // Check again after query (in case query took a long time)
                     if (System.currentTimeMillis() >= endTimeMs) {
                         Log.i(TAG, "Duration expired during query execution")
@@ -537,6 +548,15 @@ $query<|im_end|>
                     while (waited < waitDurationMs && isRunning && System.currentTimeMillis() < endTimeMs) {
                         delay(checkInterval)
                         waited += checkInterval
+                        
+                        // Check battery level - if critically low, save CSV immediately
+                        val batteryLevel = batteryMonitor.getCurrentBatteryLevel()
+                        if (batteryLevel <= CRITICAL_BATTERY_LEVEL && batteryLevel > 0) {
+                            Log.e(TAG, "⚠️ CRITICAL BATTERY LEVEL: $batteryLevel% - Saving CSV immediately before phone dies")
+                            handleEarlyTermination("Battery died at ${batteryLevel}%")
+                            return@launch // Exit coroutine
+                        }
+                        
                         val remainingWait = waitDurationMs - waited
                         val timeLeft = endTimeMs - System.currentTimeMillis()
                         if (remainingWait > 0 && timeLeft > 0) {
@@ -616,6 +636,67 @@ $query<|im_end|>
             Log.e(TAG, "Coroutine scope ending")
         }
         Log.e(TAG, "startBenchmark() function returning")
+    }
+    
+    /**
+     * Handles early termination of benchmark (e.g., due to low battery).
+     * Exports CSV immediately with metadata about the early termination.
+     */
+    private suspend fun handleEarlyTermination(reason: String) {
+        Log.e(TAG, "=== EARLY TERMINATION ===")
+        Log.e(TAG, "Reason: $reason")
+        
+        // Calculate time remaining
+        val currentTime = System.currentTimeMillis()
+        val timeRemainingMs = maxOf(0, endTimeMs - currentTime)
+        val timeRemainingMinutes = timeRemainingMs / (60.0 * 1000.0)
+        val timeRemainingHours = timeRemainingMinutes / 60.0
+        
+        Log.e(TAG, "Original duration: $originalDurationMinutes minutes (${originalDurationMinutes / 60.0} hours)")
+        Log.e(TAG, "Time remaining: $timeRemainingMinutes minutes (${timeRemainingHours} hours)")
+        Log.e(TAG, "Queries completed: $queriesCompleted")
+        
+        // Log final battery metrics
+        val finalBatteryMetrics = batteryMonitor.logMetrics()
+        dataLogger.logBattery(finalBatteryMetrics)
+        
+        // Export CSV with early termination metadata
+        updateNotification("Battery low! Saving results...")
+        val csvFile = dataLogger.exportAllDataToCSV(
+            prompts = testQueries,
+            originalDurationMinutes = originalDurationMinutes,
+            timeRemainingMinutes = timeRemainingMinutes,
+            terminationReason = reason
+        )
+        
+        Log.e(TAG, "=== CSV FILE EXPORTED (EARLY TERMINATION) ===")
+        Log.e(TAG, "File: ${csvFile?.absolutePath ?: "FAILED"}")
+        if (csvFile != null) {
+            Log.e(TAG, "File exists: ${csvFile.exists()}")
+            Log.e(TAG, "File size: ${csvFile.length()} bytes")
+        }
+        
+        // Show notification
+        val notificationManager = getSystemService(NotificationManager::class.java)
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID_COMPLETION)
+            .setContentTitle("⚠️ Benchmark Stopped Early")
+            .setContentText("Battery died. Results saved.")
+            .setStyle(NotificationCompat.BigTextStyle()
+                .bigText("Benchmark stopped early due to low battery.\n\n" +
+                        "Original duration: ${originalDurationMinutes / 60.0} hours\n" +
+                        "Time remaining: ${String.format("%.1f", timeRemainingHours)} hours\n" +
+                        "Queries completed: $queriesCompleted\n\n" +
+                        "Results saved to CSV file."))
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .build()
+        notificationManager.notify(NOTIFICATION_ID_COMPLETION, notification)
+        
+        updateNotification("Battery died. Results saved.")
+        delay(3000) // Give time for file to be written
+        
+        stopBenchmark()
     }
     
     private fun stopBenchmark() {
