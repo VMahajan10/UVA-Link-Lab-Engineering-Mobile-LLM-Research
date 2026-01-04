@@ -666,7 +666,8 @@ $query<|im_end|>
             prompts = testQueries,
             originalDurationMinutes = originalDurationMinutes,
             timeRemainingMinutes = timeRemainingMinutes,
-            terminationReason = reason
+            terminationReason = reason,
+            terminationTimestamp = currentTime  // Pass the timestamp when termination occurred
         )
         
         Log.e(TAG, "=== CSV FILE EXPORTED (EARLY TERMINATION) ===")

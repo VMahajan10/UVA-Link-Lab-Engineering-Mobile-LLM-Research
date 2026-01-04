@@ -32,13 +32,13 @@ void batch_clear(llama_batch& batch) {
 // Helper: Add token to batch
 void batch_add(llama_batch& batch, llama_token id, llama_pos pos, const std::vector<llama_seq_id>& seq_ids, bool logits) {
     if (batch.n_tokens >= 512) {
-        LOGE("Batch size exceeded");
+        LOGE("Batch size exceeded: %d tokens", batch.n_tokens);
         return;
     }
     batch.token[batch.n_tokens] = id;
     batch.pos[batch.n_tokens] = pos;
     batch.n_seq_id[batch.n_tokens] = seq_ids.size();
-    for (size_t i = 0; i < seq_ids.size(); i++) {
+    for (size_t i = 0; i < seq_ids.size() && i < 16; i++) {  // Limit to max seq_ids
         batch.seq_id[batch.n_tokens][i] = seq_ids[i];
     }
     batch.logits[batch.n_tokens] = logits;
@@ -158,10 +158,24 @@ Java_com_research_llmbattery_LLMService_nativeGenerate(
     
     // Get vocab
     const llama_vocab* vocab = llama_model_get_vocab(wrapper->model);
+    if (!vocab) {
+        LOGE("Failed to get vocabulary from model");
+        return env->NewStringUTF("Error: Failed to get vocabulary");
+    }
     
     // Tokenize prompt
     std::vector<llama_token> tokens = tokenize(vocab, prompt, true);
     int n_tokens = tokens.size();
+    
+    if (n_tokens == 0) {
+        LOGE("Tokenization resulted in 0 tokens");
+        return env->NewStringUTF("Error: Tokenization failed");
+    }
+    
+    if (n_tokens > 512) {
+        LOGE("Prompt too long: %d tokens (max 512)", n_tokens);
+        return env->NewStringUTF("Error: Prompt too long");
+    }
     
     LOGD("Tokenized prompt: %d tokens", n_tokens);
     
@@ -170,19 +184,54 @@ Java_com_research_llmbattery_LLMService_nativeGenerate(
     
     // Create batch
     llama_batch batch = llama_batch_init(512, 0, 1);
-    
-    // Add prompt tokens
-    for (int i = 0; i < n_tokens; i++) {
-        batch_add(batch, tokens[i], i, {0}, false);
+    if (!batch.token) {
+        LOGE("Failed to initialize batch");
+        return env->NewStringUTF("Error: Failed to initialize batch");
     }
-    batch.logits[batch.n_tokens - 1] = true;
+    
+    // Always use sequence 0 and always start from position 0
+    // Clear the previous sequence from KV cache before starting new query
+    llama_seq_id seq_id = 0;
+    llama_pos start_pos = 0;
+    
+    // Get memory object and clear sequence 0 to start fresh
+    llama_memory_t mem = llama_get_memory(wrapper->ctx);
+    if (mem) {
+        // Remove all tokens from sequence 0 (p0=-1 means from 0, p1=-1 means to end)
+        llama_memory_seq_rm(mem, seq_id, -1, -1);
+        LOGD("Cleared sequence %d from KV cache", seq_id);
+    } else {
+        LOGE("Failed to get memory object from context");
+    }
+    
+    LOGD("Starting new query at position 0 (sequence %d)", seq_id);
+    
+    // Add prompt tokens starting from position 0
+    for (int i = 0; i < n_tokens; i++) {
+        // Set logits=true only for the last token
+        bool logits = (i == n_tokens - 1);
+        batch_add(batch, tokens[i], i, {seq_id}, logits);
+    }
+    
+    if (batch.n_tokens == 0) {
+        LOGE("No tokens added to batch");
+        llama_batch_free(batch);
+        return env->NewStringUTF("Error: No tokens in batch");
+    }
+    
+    LOGD("Batch prepared: %d tokens, last token has logits: %d", batch.n_tokens, batch.logits[batch.n_tokens - 1]);
     
     // Decode prompt
-    if (llama_decode(wrapper->ctx, batch) != 0) {
-        LOGE("Failed to decode prompt");
+    int decode_result = llama_decode(wrapper->ctx, batch);
+    if (decode_result != 0) {
+        LOGE("Failed to decode prompt: error code %d, n_tokens=%d", decode_result, batch.n_tokens);
+        LOGE("Model context valid: %d", wrapper->ctx != nullptr);
+        LOGE("Model valid: %d", wrapper->model != nullptr);
         llama_batch_free(batch);
-        return env->NewStringUTF("Error: Failed to decode");
+        return env->NewStringUTF("Error: Failed to decode prompt");
     }
+    
+    LOGD("Prompt decoded successfully");
     
     // Generate tokens
     int n_generated = 0;
@@ -210,13 +259,14 @@ Java_com_research_llmbattery_LLMService_nativeGenerate(
         std::string piece = token_to_piece(vocab, new_token_id);
         response += piece;
         
-        // Prepare next batch
+        // Prepare next batch (use same sequence ID, continue from current position)
         batch_clear(batch);
-        batch_add(batch, new_token_id, n_tokens + n_generated, {0}, true);
+        batch_add(batch, new_token_id, start_pos + n_tokens + n_generated, {seq_id}, true);
         
         // Decode
-        if (llama_decode(wrapper->ctx, batch) != 0) {
-            LOGE("Failed to decode token");
+        int decode_result = llama_decode(wrapper->ctx, batch);
+        if (decode_result != 0) {
+            LOGE("Failed to decode token %d: error code %d", n_generated, decode_result);
             break;
         }
         
@@ -225,7 +275,7 @@ Java_com_research_llmbattery_LLMService_nativeGenerate(
     
     llama_batch_free(batch);
     
-    LOGD("Generated %d tokens", n_generated);
+    LOGD("Generated %d tokens for query", n_generated);
     
     return env->NewStringUTF(response.c_str());
 }

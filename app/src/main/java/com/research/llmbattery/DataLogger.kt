@@ -69,6 +69,7 @@ class DataLogger(
     private var incrementalCsvFile: File? = null
     private var incrementalCsvWriter: FileWriter? = null
     private var isIncrementalFileInitialized = false
+    private var previousBatteryAfter: Int? = null  // Track previous query's battery_after for drop calculation
     
     /**
      * Initializes the incremental CSV file for writing data after each query.
@@ -111,6 +112,7 @@ class DataLogger(
                     incrementalCsvWriter?.flush()
                     
                     isIncrementalFileInitialized = true
+                    previousBatteryAfter = null  // Reset for new benchmark
                     Log.i(TAG, "Initialized incremental CSV: ${incrementalCsvFile?.absolutePath}")
                 } catch (e: Exception) {
                     Log.e(TAG, "Error initializing incremental CSV", e)
@@ -148,7 +150,15 @@ class DataLogger(
                     // Calculate actual changes
                     val batteryBeforeLevel = batteryBefore?.batteryLevel ?: queryResult.batteryLevel
                     val batteryAfterLevel = queryResult.batteryLevel
-                    val batteryChange = batteryBeforeLevel - batteryAfterLevel
+                    // Battery drop is the difference from previous query's battery_after to current query's battery_after
+                    val prevBattery = previousBatteryAfter
+                    val batteryChange = if (prevBattery != null) {
+                        prevBattery - batteryAfterLevel
+                    } else {
+                        0  // First query has no previous value
+                    }
+                    // Update previous battery_after for next iteration
+                    previousBatteryAfter = batteryAfterLevel
                     
                     val cpuBefore = batteryBefore?.cpuUsage ?: 0.0f
                     val cpuAfter = batteryAfter?.cpuUsage ?: batteryBefore?.cpuUsage ?: 0.0f
@@ -279,7 +289,8 @@ class DataLogger(
         prompts: List<String>? = null,
         originalDurationMinutes: Double? = null,
         timeRemainingMinutes: Double? = null,
-        terminationReason: String? = null
+        terminationReason: String? = null,
+        terminationTimestamp: Long? = null  // Timestamp when termination occurred
     ): File? {
         return withContext(Dispatchers.IO) {
             try {
@@ -391,12 +402,47 @@ class DataLogger(
                 // Get battery metrics (queryResults already retrieved above)
                 val allBatteryMetrics = lock.read { batteryMetrics.toList() }
                 
+                // Filter out queries that occurred after termination (if early termination)
+                val filteredQueryResults = if (terminationTimestamp != null && terminationReason != null) {
+                    // Only include queries that occurred before or at termination time
+                    // Also filter out queries where battery_after > 5% if termination was due to battery
+                    val batteryTerminated = terminationReason.contains("Battery", ignoreCase = true) || 
+                                           terminationReason.contains("5%", ignoreCase = true) ||
+                                           terminationReason.contains("died", ignoreCase = true)
+                    queryResults.filter { queryResult ->
+                        val beforeTermination = queryResult.timestamp <= terminationTimestamp
+                        if (batteryTerminated && beforeTermination) {
+                            // For battery termination, also filter out queries with battery > 5%
+                            // that appear after queries with battery <= 5%
+                            // Find the last query with battery <= 5%
+                            val lastLowBatteryQuery = queryResults
+                                .filter { it.batteryLevel <= 5 }
+                                .maxByOrNull { it.timestamp }
+                            
+                            if (lastLowBatteryQuery != null && queryResult.timestamp > lastLowBatteryQuery.timestamp) {
+                                // This query is after the last low battery query, so filter it out if battery > 5%
+                                queryResult.batteryLevel <= 5
+                            } else {
+                                true  // Keep queries before the last low battery query
+                            }
+                        } else {
+                            beforeTermination
+                        }
+                    }
+                } else {
+                    queryResults
+                }
+                
+                // Sort queries by timestamp to ensure chronological order
+                val sortedQueryResults = filteredQueryResults.sortedBy { it.timestamp }
+                
                 Log.i(TAG, "=== CSV EXPORT START ===")
                 Log.i(TAG, "Query results count: ${queryResults.size}")
+                Log.i(TAG, "Filtered query results count: ${sortedQueryResults.size}")
                 Log.i(TAG, "Battery metrics count: ${allBatteryMetrics.size}")
                 
-                if (queryResults.isEmpty()) {
-                    Log.w(TAG, "WARNING: No query results to export!")
+                if (sortedQueryResults.isEmpty()) {
+                    Log.w(TAG, "WARNING: No query results to export after filtering!")
                     // Still write header even if no results, so file is created
                 }
                 if (allBatteryMetrics.isEmpty()) {
@@ -413,8 +459,9 @@ class DataLogger(
                 
                 // Write each query with matching battery metrics
                 var rowsWritten = 0
-                if (queryResults.isNotEmpty()) {
-                    queryResults.forEachIndexed { index, queryResult ->
+                var previousBatteryAfter: Int? = null  // Track previous query's battery_after for drop calculation
+                if (sortedQueryResults.isNotEmpty()) {
+                    sortedQueryResults.forEachIndexed { index, queryResult ->
                     val queryNumber = index + 1
                     val promptNumber = promptToNumber[queryResult.queryText] ?: 0
                     
@@ -430,7 +477,15 @@ class DataLogger(
                     // Calculate actual changes
                     val batteryBeforeLevel = batteryBefore?.batteryLevel ?: queryResult.batteryLevel
                     val batteryAfterLevel = queryResult.batteryLevel
-                    val batteryChange = batteryBeforeLevel - batteryAfterLevel  // Actual change (before - after)
+                    // Battery drop is the difference from previous query's battery_after to current query's battery_after
+                    val prevBattery = previousBatteryAfter
+                    val batteryChange = if (prevBattery != null) {
+                        prevBattery - batteryAfterLevel
+                    } else {
+                        0  // First query has no previous value
+                    }
+                    // Update previous battery_after for next iteration
+                    previousBatteryAfter = batteryAfterLevel
                     
                     val cpuBefore = batteryBefore?.cpuUsage ?: 0.0f
                     val cpuAfter = batteryAfter?.cpuUsage ?: batteryBefore?.cpuUsage ?: 0.0f
@@ -608,6 +663,7 @@ class DataLogger(
                     incrementalCsvWriter = null
                     incrementalCsvFile = null
                     isIncrementalFileInitialized = false
+                    previousBatteryAfter = null  // Reset when closing
                     Log.i(TAG, "Closed incremental CSV: ${file?.absolutePath}")
                     
                     // Scan the file to make it immediately visible
